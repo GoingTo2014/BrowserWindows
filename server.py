@@ -494,5 +494,6 @@ def stream_websocket(ws):
             state.process.kill()
 
 
+# Explicit entry point for local and GitHub Actions startup.
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, threaded=True, use_reloader=False)
