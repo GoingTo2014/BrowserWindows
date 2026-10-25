@@ -1,6 +1,6 @@
 Flask>=3.1,<4
 aiortc>=1.10,<2
-av>=13,<15
+av>=14,<15
 numpy>=1.26,<3
 flask-sock>=0.7,<1
 pynput>=1.8,<2
