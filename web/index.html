@@ -26,6 +26,7 @@
   <header>
     <div class="brand">BrowserWindows</div>
     <div class="status" id="status">Connecting…</div>
+    <button id="typeButton" type="button">Type</button>
     <button id="fullscreen" type="button">Fullscreen</button>
     <form method="post" action="/logout"><button type="submit">Disconnect</button></form>
   </header>
@@ -212,6 +213,10 @@
   }
 
   const typeText = document.getElementById('typeText');
+  document.getElementById('typeButton').addEventListener('click', () => {
+    typeText.classList.add('visible');
+    typeText.focus();
+  });
   typeText.addEventListener('focus', () => typeText.classList.add('visible'));
   typeText.addEventListener('input', () => {
     const value = typeText.value;
