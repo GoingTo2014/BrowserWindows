@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="color-scheme" content="dark">
+  <title>BrowserWindows</title>
+  <style>
+    :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f4f4f5;background:#09090b}
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#09090b}
+    header{height:44px;display:flex;align-items:center;gap:12px;padding:0 12px;background:#18181b;border-bottom:1px solid #303038}
+    .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+    button{border:1px solid #454550;border-radius:8px;background:#27272a;color:#f4f4f5;padding:7px 10px;font:inherit;cursor:pointer}
+    #stage{height:calc(100% - 44px);display:grid;place-items:center;position:relative;outline:none}
+    video{display:block;max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;outline:none;touch-action:none}
+    #message{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(90%,600px);padding:14px 18px;border:1px solid #3f3f46;border-radius:12px;background:#18181bee;color:#e4e4e7;text-align:center;line-height:1.5}
+    #message.hidden{display:none}
+    @media(max-width:600px){header{gap:7px;padding:0 8px}.brand{font-size:14px}.status{font-size:11px}button{padding:6px 8px;font-size:12px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">BrowserWindows</div>
+    <div class="status" id="status">Connecting…</div>
+    <button id="fullscreen" type="button">Fullscreen</button>
+    <form method="post" action="/logout"><button type="submit">Disconnect</button></form>
+  </header>
+  <main id="stage" tabindex="0">
+    <video id="screen" autoplay muted playsinline tabindex="0"></video>
+    <div id="message">Connecting to the Windows desktop…</div>
+  </main>
+<script>
+(() => {
+  const video = document.getElementById('screen');
+  const stage = document.getElementById('stage');
+  const status = document.getElementById('status');
+  const message = document.getElementById('message');
+  let ws, mediaSource, sourceBuffer, objectUrl;
+  const appendQueue = [];
+  let initQueued = false;
+
+  function setStatus(text) { status.textContent = text; }
+  function showMessage(text) { message.textContent = text; message.classList.remove('hidden'); }
+  function hideMessage() { message.classList.add('hidden'); }
+
+  function drainQueue() {
+    if (!sourceBuffer || sourceBuffer.updating || appendQueue.length === 0) return;
+    try {
+      sourceBuffer.appendBuffer(appendQueue.shift());
+    } catch (error) {
+      setStatus('Video buffer error');
+      console.error(error);
+    }
+  }
+
+  function setupMse() {
+    if (!('MediaSource' in window) || !MediaSource.isTypeSupported('video/mp4; codecs="avc1.42C01E"')) {
+      showMessage('This browser does not support the required H.264 Media Source Extensions.');
+      setStatus('Unsupported browser');
+      return;
+    }
+    mediaSource = new MediaSource();
+    objectUrl = URL.createObjectURL(mediaSource);
+    video.src = objectUrl;
+    mediaSource.addEventListener('sourceopen', () => {
+      if (sourceBuffer) return;
+      sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42C01E"');
+      sourceBuffer.mode = 'segments';
+      sourceBuffer.addEventListener('updateend', () => {
+        const ranges = sourceBuffer.buffered;
+        if (ranges.length) {
+          const end = ranges.end(ranges.length - 1);
+          if (video.currentTime < end - 1.25) {
+            video.currentTime = Math.max(0, end - 0.25);
+          }
+          if (end > 8 && !sourceBuffer.updating) {
+            try { sourceBuffer.remove(0, end - 4); } catch (_) {}
+          }
+          if (video.paused) video.play().catch(() => {});
+        }
+        drainQueue();
+      });
+      drainQueue();
+    }, {once:true});
+  }
+
+  function connect() {
+    setStatus('Connecting…');
+    showMessage('Connecting to the Windows desktop…');
+    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => setStatus('Connected · starting H.264 stream');
+    ws.onmessage = event => {
+      if (typeof event.data === 'string') {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.error) {
+            showMessage(data.error);
+            setStatus('Stream error');
+          }
+        } catch (_) {}
+        return;
+      }
+      if (!mediaSource) setupMse();
+      if (mediaSource && mediaSource.readyState !== 'closed') {
+        appendQueue.push(event.data);
+        if (appendQueue.length > 100) {
+          appendQueue.splice(1, appendQueue.length - 100);
+        }
+        if (initQueued === false) {
+          initQueued = true;
+          setStatus('Receiving H.264 video');
+          hideMessage();
+        }
+        drainQueue();
+      }
+    };
+    ws.onerror = () => setStatus('Connection error');
+    ws.onclose = () => {
+      setStatus('Disconnected');
+      showMessage('The desktop stream disconnected. Refresh this page after checking the GitHub Actions run.');
+    };
+  }
+
+  function send(data) {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+  }
+
+  function pointerPosition(event) {
+    const rect = video.getBoundingClientRect();
+    const vw = video.videoWidth || rect.width;
+    const vh = video.videoHeight || rect.height;
+    const scale = Math.min(rect.width / vw, rect.height / vh);
+    const shownW = vw * scale, shownH = vh * scale;
+    const left = rect.left + (rect.width - shownW) / 2;
+    const top = rect.top + (rect.height - shownH) / 2;
+    return {
+      x: Math.max(0, Math.min(1, (event.clientX - left) / shownW)),
+      y: Math.max(0, Math.min(1, (event.clientY - top) / shownH))
+    };
+  }
+
+  video.addEventListener('pointermove', event => {
+    const p = pointerPosition(event); send({type:'move', ...p});
+  });
+  video.addEventListener('pointerdown', event => {
+    event.preventDefault(); video.focus();
+    try { video.setPointerCapture(event.pointerId); } catch (_) {}
+    const p = pointerPosition(event); send({type:'move', ...p});
+    send({type:'mouse_down', button:({0:'left',1:'middle',2:'right'})[event.button] || 'left'});
+  });
+  video.addEventListener('pointerup', event => {
+    event.preventDefault();
+    send({type:'mouse_up', button:({0:'left',1:'middle',2:'right'})[event.button] || 'left'});
+  });
+  video.addEventListener('contextmenu', event => event.preventDefault());
+  video.addEventListener('wheel', event => {
+    event.preventDefault();
+    send({type:'scroll', delta: Math.max(-10, Math.min(10, -Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / 100))))});
+  }, {passive:false});
+
+  const ignoredKeys = new Set(['F5', 'F11', 'F12']);
+  document.addEventListener('keydown', event => {
+    if (event.target.closest && event.target.closest('button,form,input')) return;
+    if (ignoredKeys.has(event.code)) return;
+    event.preventDefault();
+    send({type:'key_down', code:event.code});
+  });
+  document.addEventListener('keyup', event => {
+    if (event.target.closest && event.target.closest('button,form,input')) return;
+    if (ignoredKeys.has(event.code)) return;
+    event.preventDefault();
+    send({type:'key_up', code:event.code});
+  });
+
+  document.getElementById('fullscreen').addEventListener('click', async () => {
+    try {
+      if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
+      else await document.exitFullscreen();
+    } catch (_) {}
+  });
+
+  window.addEventListener('beforeunload', () => {
+    if (ws) ws.close();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+  });
+  connect();
+})();
+</script>
+</body>
+</html>
