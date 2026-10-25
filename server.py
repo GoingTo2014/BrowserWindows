@@ -430,7 +430,17 @@ def input_websocket(ws):
             try:
                 message = json.loads(raw) if isinstance(raw, str) else {}
                 if isinstance(message, dict):
-                    handle_input(message, mouse_ctl, key_ctl, width, height)
+                    if message.get("type") == "test_cursor":
+                        test_x, test_y = width // 2, height // 2
+                        mouse_ctl.position = (test_x, test_y)
+                        ws.send(json.dumps({
+                            "type": "input_test",
+                            "ok": mouse_ctl.position == (test_x, test_y),
+                            "x": test_x,
+                            "y": test_y,
+                        }))
+                    else:
+                        handle_input(message, mouse_ctl, key_ctl, width, height)
             except (ValueError, TypeError, KeyError, OverflowError):
                 pass
     except Exception:
