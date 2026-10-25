@@ -6,7 +6,8 @@ A temporary browser-accessible Windows desktop prototype powered by GitHub Actio
 
 - Starts a temporary **Windows Server 2022** GitHub-hosted runner.
 - Captures the desktop with FFmpeg and encodes low-latency H.264.
-- Sends fragmented MP4 over a WebSocket, so video travels through HTTPS/TCP and can pass through a standard Cloudflare Quick Tunnel. This avoids relying on a direct WebRTC/UDP media connection.
+- Tries an experimental WebRTC video path first, using H.264 and STUN-assisted ICE connectivity.
+- Automatically falls back to the existing fragmented MP4 over WebSocket/TCP path when WebRTC negotiation or connectivity fails. The TCP path works through a standard Cloudflare Quick Tunnel.
 - Supports browser mouse and keyboard input.
 - Protects the browser session with a password login.
 - Uses a temporary Cloudflare Quick Tunnel; the session ends when the Actions job is cancelled or times out.
@@ -17,7 +18,7 @@ A temporary browser-accessible Windows desktop prototype powered by GitHub Actio
 
 This first prototype streams video and mouse/keyboard input. System audio and clipboard synchronization are not implemented yet. The runner may also provide a locked or unavailable desktop capture surface; if FFmpeg cannot capture the runner desktop, the session will report a stream error. We need a real Actions run to verify that.
 
-The stream uses H.264 fragmented MP4 over WebSocket/TCP rather than noVNC. It should be more efficient for moving screens, but browser/runner constraints mean smoothness and latency must be measured in the actual session. It is not WebRTC and does not promise the same latency as a direct WebRTC connection.
+The experimental WebRTC path captures desktop frames with FFmpeg and passes them to aiortc for H.264 encoding. It uses STUN to discover candidate routes, but STUN alone cannot guarantee connectivity through the GitHub runner's NAT/firewall. The browser automatically falls back to the existing H.264 fragmented-MP4 WebSocket/TCP stream if negotiation fails or the UDP path does not connect. Direct UDP has not yet been verified on the hosted runner, and this change must be tested with a real Actions session. WebRTC may also use a non-UDP candidate depending on network conditions; the UI reports WebRTC when connected, not a guaranteed UDP route.
 
 ## Setup
 
@@ -46,7 +47,9 @@ The workflow runs for up to 350 minutes. To end the session, open the running wo
 
 - **The workflow fails because the secret is missing:** add `DESKTOP_PASSWORD` under repository Actions secrets.
 - **The tunnel starts but video fails:** open the workflow logs and look for FFmpeg or desktop-capture errors. Hosted runners are CI machines, not guaranteed interactive cloud PCs.
+- **WebRTC never connects:** the browser should switch to TCP automatically. The runner or network may block direct UDP; the TCP fallback remains available.
 - **The browser says H.264/MSE is unsupported:** try a current version of Chrome, Edge, or Firefox.
+- **WebRTC reports no H.264 encoder:** check the Python dependency installation logs; the experimental WebRTC path needs compatible aiortc/PyAV H.264 support.
 - **The desktop URL loads but login does not persist:** check that you opened the HTTPS tunnel URL, not the local HTTP URL.
 
 ## Security notes
