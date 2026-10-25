@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
@@ -13,6 +14,10 @@ from pathlib import Path
 from flask import Flask, redirect, render_template, request, session, url_for
 from flask_sock import Sock
 from pynput import keyboard, mouse
+import av
+import numpy as np
+from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer, RTCSessionDescription, RTCRtpSender
+from aiortc.mediastreams import MediaStreamError, VideoStreamTrack
 
 ROOT = Path(__file__).resolve().parent
 PASSWORD = os.environ.get("DESKTOP_PASSWORD", "")
@@ -33,6 +38,17 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=3600,
 )
 sock = Sock(app)
+
+# A dedicated event loop is required because Flask's request loop ends after each response.
+rtc_loop = asyncio.new_event_loop()
+rtc_peers: set[RTCPeerConnection] = set()
+rtc_peers_lock = threading.Lock()
+
+def _run_rtc_loop():
+    asyncio.set_event_loop(rtc_loop)
+    rtc_loop.run_forever()
+
+threading.Thread(target=_run_rtc_loop, name="webrtc-loop", daemon=True).start()
 
 failed_logins: dict[str, tuple[int, float]] = {}
 login_lock = threading.Lock()
@@ -200,6 +216,106 @@ def ffmpeg_command() -> list[str]:
         "-frag_duration", "200000", "-flush_packets", "1",
         "-f", "mp4", "pipe:1",
     ]
+
+
+class WindowsDesktopTrack(VideoStreamTrack):
+    """Capture the Windows desktop with FFmpeg and hand frames to aiortc's H.264 encoder."""
+    def __init__(self):
+        super().__init__()
+        import ctypes
+        user32 = ctypes.windll.user32
+        source_width = max(2, int(user32.GetSystemMetrics(0)))
+        source_height = max(2, int(user32.GetSystemMetrics(1)))
+        scale = min(1.0, 1280.0 / source_width)
+        self.width = max(2, int(source_width * scale) // 2 * 2)
+        self.height = max(2, int(source_height * scale) // 2 * 2)
+        self.process = subprocess.Popen(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "gdigrab", "-draw_mouse", "1", "-framerate", "30",
+                "-i", "desktop",
+                "-vf", f"scale={self.width}:{self.height}:flags=fast_bilinear,format=bgr24",
+                "-an", "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1",
+            ],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, bufsize=0,
+        )
+
+    async def recv(self):
+        pts, time_base = await self.next_timestamp()
+        if self.process.stdout is None:
+            raise MediaStreamError
+        raw = await asyncio.to_thread(read_exact, self.process.stdout, self.width * self.height * 3)
+        if raw is None:
+            raise MediaStreamError
+        array = np.frombuffer(raw, dtype=np.uint8).reshape((self.height, self.width, 3))
+        frame = av.VideoFrame.from_ndarray(array, format="bgr24")
+        frame.pts = pts
+        frame.time_base = time_base
+        return frame
+
+    def stop(self):
+        super().stop()
+        if getattr(self, "process", None) and self.process.poll() is None:
+            self.process.kill()
+
+
+async def create_rtc_answer(offer_sdp: str, offer_type: str):
+    configuration = RTCConfiguration(
+        iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+    )
+    pc = RTCPeerConnection(configuration=configuration)
+    track = None
+    try:
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=offer_sdp, type=offer_type))
+        track = WindowsDesktopTrack()
+        pc.addTrack(track)
+        video_transceiver = next((item for item in pc.getTransceivers() if item.kind == "video"), None)
+        if video_transceiver:
+            h264 = [codec for codec in RTCRtpSender.getCapabilities("video").codecs
+                    if codec.mimeType.lower() == "video/h264"]
+            if not h264:
+                raise RuntimeError("This aiortc/PyAV installation has no H.264 encoder.")
+            video_transceiver.setCodecPreferences(h264)
+        with rtc_peers_lock:
+            rtc_peers.add(pc)
+
+        @pc.on("connectionstatechange")
+        async def on_connectionstatechange():
+            if pc.connectionState in ("failed", "closed"):
+                if track:
+                    track.stop()
+                with rtc_peers_lock:
+                    rtc_peers.discard(pc)
+                if pc.connectionState == "failed":
+                    await pc.close()
+
+        await pc.setLocalDescription(await pc.createAnswer())
+        return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    except Exception:
+        if track:
+            track.stop()
+        with rtc_peers_lock:
+            rtc_peers.discard(pc)
+        await pc.close()
+        raise
+
+
+@app.post("/offer")
+def webrtc_offer():
+    if not session.get("authenticated"):
+        return {"error": "Authentication required"}, 401
+    payload = request.get_json(silent=True) or {}
+    sdp = payload.get("sdp")
+    offer_type = payload.get("type")
+    if not isinstance(sdp, str) or len(sdp) > 200_000 or offer_type != "offer":
+        return {"error": "Invalid WebRTC offer."}, 400
+    try:
+        future = asyncio.run_coroutine_threadsafe(create_rtc_answer(sdp, offer_type), rtc_loop)
+        answer = future.result(timeout=35)
+        return answer
+    except Exception as exc:
+        return {"error": f"WebRTC unavailable: {str(exc)[:240]}"}, 503
 
 
 def key_from_code(code: str):
