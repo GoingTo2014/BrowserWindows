@@ -2,95 +2,108 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <title>BrowserWindows</title>
   <style>
     :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f4f4f5;background:#09090b}
     *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#09090b}
-    body{height:100dvh;display:flex;flex-direction:column}
-    header{min-height:44px;display:flex;align-items:center;gap:10px;padding:6px 12px;background:#18181b;border-bottom:1px solid #303038;flex:0 0 auto;flex-wrap:wrap}
-    .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:100px}.telemetry{font-size:11px;color:#a1a1aa;white-space:nowrap;font-variant-numeric:tabular-nums}
+    body{height:100dvh;display:block}
+    header{position:fixed;z-index:10;top:0;left:0;right:0;min-height:44px;display:flex;align-items:center;gap:8px;padding:6px 10px;background:#18181be8;border-bottom:1px solid #303038;backdrop-filter:blur(8px);transition:transform .2s ease,opacity .2s ease}
+    .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:80px}.telemetry{font-size:11px;color:#a1a1aa;white-space:nowrap;font-variant-numeric:tabular-nums}
     button{border:1px solid #454550;border-radius:8px;background:#27272a;color:#f4f4f5;padding:7px 10px;font:inherit;cursor:pointer}
     button,video{-webkit-tap-highlight-color:transparent}
-    #stage{height:auto;flex:1;width:100%;display:grid;place-items:center;position:relative;outline:none;min-width:0;min-height:0;overflow:hidden}
-    video{display:block;width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;outline:none;touch-action:none;user-select:none;-webkit-user-select:none}
-    #message{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(90%,600px);padding:14px 18px;border:1px solid #3f3f46;border-radius:12px;background:#18181bee;color:#e4e4e7;text-align:center;line-height:1.5}
+    #stage{height:100dvh;width:100%;display:grid;place-items:center;position:relative;outline:none;overflow:hidden;background:#000}
+    video{display:block;width:100%;height:100%;object-fit:contain;outline:none;touch-action:none;user-select:none;-webkit-user-select:none}
+    #message{position:absolute;z-index:5;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(90%,600px);padding:14px 18px;border:1px solid #3f3f46;border-radius:12px;background:#18181bee;color:#e4e4e7;text-align:center;line-height:1.5}
     #message.hidden{display:none}
-    #typeText{position:absolute;z-index:3;left:10px;right:10px;bottom:10px;width:calc(100% - 20px);padding:12px;border:1px solid #52525b;border-radius:10px;background:#18181b;color:#fff;font:inherit;display:none}
+    #typeText{position:absolute;z-index:20;left:10px;right:10px;bottom:10px;width:calc(100% - 20px);padding:12px;border:1px solid #52525b;border-radius:10px;background:#18181b;color:#fff;font:inherit;display:none}
     #typeText.visible{display:block}
-    @media(max-width:600px){header{gap:6px;padding:5px 7px;min-height:56px}.brand{font-size:13px}.status{font-size:10px;min-width:70px}.telemetry{font-size:10px}button{padding:5px 7px;font-size:11px}}
+    #touchHelp{position:absolute;z-index:6;left:50%;bottom:18px;transform:translateX(-50%);padding:7px 10px;border-radius:9px;background:#18181bd9;border:1px solid #3f3f46;color:#d4d4d8;font-size:11px;pointer-events:none;opacity:0;transition:opacity .2s}
+    #touchHelp.visible{opacity:1}
+    #stage.immersive header{transform:translateY(-110%);opacity:0;pointer-events:none}
+    #stage.immersive #touchHelp{bottom:12px}
+    @media(max-width:700px){
+      header{gap:5px;padding:5px 6px;min-height:46px}
+      .brand{font-size:12px}.status{font-size:10px;min-width:45px}.telemetry{display:none}
+      header button{padding:6px 7px;font-size:10px}
+      header form{display:contents}
+      #stage{height:100dvh}
+      #touchHelp{font-size:10px;bottom:10px}
+    }
+    @media(max-width:430px){
+      .brand,.status{display:none}
+      header{justify-content:flex-end}
+    }
   </style>
 </head>
 <body>
-  <header>
+  <header id="toolbar">
     <div class="brand">BrowserWindows</div>
     <div class="status" id="status">Connecting…</div>
     <div class="telemetry" id="telemetry">FPS: — · Frame: — · Input: connecting</div>
     <button id="testInput" type="button">Test cursor</button>
-    <button id="typeButton" type="button">Type</button>
-    <button id="fullscreen" type="button">Fullscreen</button>
+    <button id="typeButton" type="button">Keyboard</button>
+    <button id="screenButton" type="button">Screen</button>
     <form method="post" action="/logout"><button type="submit">Disconnect</button></form>
   </header>
   <main id="stage" tabindex="0">
     <video id="screen" autoplay muted playsinline tabindex="0"></video>
     <div id="message">Connecting to the Windows desktop…</div>
+    <div id="touchHelp">Touch: tap = click · hold + drag = move/drag · two fingers = scroll · two-finger tap = right click</div>
     <input id="typeText" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Tap here to type on Windows…" aria-label="Type text on Windows">
   </main>
 <script>
 (() => {
-  const video=document.getElementById('screen'),stage=document.getElementById('stage'),status=document.getElementById('status'),telemetry=document.getElementById('telemetry'),message=document.getElementById('message'),typeText=document.getElementById('typeText');
+  const video=document.getElementById('screen'),stage=document.getElementById('stage'),status=document.getElementById('status'),telemetry=document.getElementById('telemetry'),message=document.getElementById('message'),typeText=document.getElementById('typeText'),touchHelp=document.getElementById('touchHelp');
   let ws=null,mediaSource=null,sourceBuffer=null,streamExpectedAt=0,lastFrameAt=0,frameCount=0,fps=0,lastFrameCounterAt=performance.now(),appendQueue=[],initQueued=false,reconnectTimer=null,httpTestInProgress=false;
+  const touches=new Map();
+  let touchGroupMoved=false,touchGroupMulti=false,touchDrag=false,touchDragTimer=null,touchHelpTimer=null;
   function setStatus(text){status.textContent=text}
   function showMessage(text){message.textContent=text;message.classList.remove('hidden')}
   function hideMessage(){message.classList.add('hidden')}
   function noteFrame(){lastFrameAt=performance.now();frameCount++}
-  function updateTelemetry(){
-    const now=performance.now(),age=lastFrameAt?(now-lastFrameAt)/1000:null,wait=streamExpectedAt?(now-streamExpectedAt)/1000:null;
-    const frameText=age!==null?(age>3?'FROZEN '+age.toFixed(1)+'s':age.toFixed(1)+'s ago'):(wait!==null?'no frames '+wait.toFixed(1)+'s':'—');
-    telemetry.textContent='FPS: '+fps+' · Frame: '+frameText+' · Input: '+(ws&&ws.readyState===WebSocket.OPEN?'WebSocket':'disconnected');
-    telemetry.style.color=ws&&ws.readyState===WebSocket.OPEN?'#a1a1aa':'#fbbf24';
-    if(age!==null&&age>3){if(message.classList.contains('hidden')||!message.textContent.startsWith('Stream frozen:'))showMessage('Stream frozen: no new video frames for '+age.toFixed(1)+' seconds.')}
-    else if(lastFrameAt&&age<=3&&message.textContent.startsWith('Stream frozen:'))hideMessage()
-  }
-  function startFrameMonitor(){
-    if(typeof video.requestVideoFrameCallback==='function'){const watch=()=>{noteFrame();video.requestVideoFrameCallback(watch)};video.requestVideoFrameCallback(watch)}
-    else{const watch=()=>{if(video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&!video.paused)noteFrame();requestAnimationFrame(watch)};requestAnimationFrame(watch)}
-    setInterval(()=>{const now=performance.now();fps=Math.round(frameCount*1000/Math.max(1,now-lastFrameCounterAt));frameCount=0;lastFrameCounterAt=now;updateTelemetry()},1000)
-  }
+  function updateTelemetry(){const now=performance.now(),age=lastFrameAt?(now-lastFrameAt)/1000:null,wait=streamExpectedAt?(now-streamExpectedAt)/1000:null;const frameText=age!==null?(age>3?'FROZEN '+age.toFixed(1)+'s':age.toFixed(1)+'s ago'):(wait!==null?'no frames '+wait.toFixed(1)+'s':'—');telemetry.textContent='FPS: '+fps+' · Frame: '+frameText+' · Input: '+(ws&&ws.readyState===WebSocket.OPEN?'WebSocket':'disconnected');telemetry.style.color=ws&&ws.readyState===WebSocket.OPEN?'#a1a1aa':'#fbbf24';if(age!==null&&age>3){if(message.classList.contains('hidden')||!message.textContent.startsWith('Stream frozen:'))showMessage('Stream frozen: no new video frames for '+age.toFixed(1)+' seconds.')}else if(lastFrameAt&&age<=3&&message.textContent.startsWith('Stream frozen:'))hideMessage()}
+  function startFrameMonitor(){if(typeof video.requestVideoFrameCallback==='function'){const watch=()=>{noteFrame();video.requestVideoFrameCallback(watch)};video.requestVideoFrameCallback(watch)}else{const watch=()=>{if(video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&!video.paused)noteFrame();requestAnimationFrame(watch)};requestAnimationFrame(watch)}setInterval(()=>{const now=performance.now();fps=Math.round(frameCount*1000/Math.max(1,now-lastFrameCounterAt));frameCount=0;lastFrameCounterAt=now;updateTelemetry()},1000)}
   function drainQueue(){if(!sourceBuffer||sourceBuffer.updating||!appendQueue.length)return;try{sourceBuffer.appendBuffer(appendQueue.shift())}catch(error){console.error(error);setStatus('Video buffer error')}}
-  function setupMse(){
-    if(!('MediaSource' in window)||!MediaSource.isTypeSupported('video/mp4; codecs="avc1.42C01E"')){showMessage('This browser does not support the required H.264 Media Source Extensions.');setStatus('Unsupported browser');return false}
-    mediaSource=new MediaSource();video.src=URL.createObjectURL(mediaSource);
-    mediaSource.addEventListener('sourceopen',()=>{if(sourceBuffer)return;sourceBuffer=mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42C01E"');sourceBuffer.mode='segments';sourceBuffer.addEventListener('updateend',()=>{const ranges=sourceBuffer.buffered;if(ranges.length){const end=ranges.end(ranges.length-1);if(video.currentTime<end-1.25)video.currentTime=Math.max(0,end-0.25);if(end>8&&!sourceBuffer.updating){try{sourceBuffer.remove(0,end-4)}catch(_){}}if(video.paused)video.play().catch(()=>{})}drainQueue()});drainQueue()},{once:true});
-    return true
-  }
-  function connect(){
-    if(ws&&(ws.readyState===WebSocket.CONNECTING||ws.readyState===WebSocket.OPEN))return;
-    clearTimeout(reconnectTimer);initQueued=false;appendQueue=[];streamExpectedAt=0;lastFrameAt=0;
-    if(sourceBuffer){try{sourceBuffer.abort()}catch(_){}sourceBuffer=null}mediaSource=null;video.removeAttribute('src');video.load();
-    setStatus('Connecting to H.264 stream…');showMessage('Connecting to the Windows desktop…');
-    ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.binaryType='arraybuffer';
-    ws.onopen=()=>{streamExpectedAt=performance.now();setStatus('Connected · starting H.264 stream');updateTelemetry()};
-    ws.onmessage=event=>{if(typeof event.data==='string'){try{const data=JSON.parse(event.data);if(data.error){showMessage(data.error);setStatus('Stream error')}}catch(_){}return}if(!mediaSource&&!setupMse())return;appendQueue.push(event.data);if(appendQueue.length>100)appendQueue.splice(1,appendQueue.length-100);if(!initQueued){initQueued=true;setStatus('Receiving H.264 video');hideMessage()}drainQueue()};
-    ws.onerror=()=>setStatus('Video WebSocket error');
-    ws.onclose=()=>{setStatus('Stream disconnected');showMessage('The desktop stream disconnected. Reconnecting…');updateTelemetry();reconnectTimer=setTimeout(connect,2500)};
-  }
+  function setupMse(){if(!('MediaSource' in window)||!MediaSource.isTypeSupported('video/mp4; codecs="avc1.42C01E"')){showMessage('This browser does not support the required H.264 Media Source Extensions.');setStatus('Unsupported browser');return false}mediaSource=new MediaSource();video.src=URL.createObjectURL(mediaSource);mediaSource.addEventListener('sourceopen',()=>{if(sourceBuffer)return;sourceBuffer=mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42C01E"');sourceBuffer.mode='segments';sourceBuffer.addEventListener('updateend',()=>{const ranges=sourceBuffer.buffered;if(ranges.length){const end=ranges.end(ranges.length-1);if(video.currentTime<end-1.25)video.currentTime=Math.max(0,end-0.25);if(end>8&&!sourceBuffer.updating){try{sourceBuffer.remove(0,end-4)}catch(_){}}if(video.paused)video.play().catch(()=>{})}drainQueue()});drainQueue()},{once:true});return true}
+  function connect(){if(ws&&(ws.readyState===WebSocket.CONNECTING||ws.readyState===WebSocket.OPEN))return;clearTimeout(reconnectTimer);initQueued=false;appendQueue=[];streamExpectedAt=0;lastFrameAt=0;if(sourceBuffer){try{sourceBuffer.abort()}catch(_){}sourceBuffer=null}mediaSource=null;video.removeAttribute('src');video.load();setStatus('Connecting to H.264 stream…');showMessage('Connecting to the Windows desktop…');ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.binaryType='arraybuffer';ws.onopen=()=>{streamExpectedAt=performance.now();setStatus('Connected · starting H.264 stream');updateTelemetry()};ws.onmessage=event=>{if(typeof event.data==='string'){try{const data=JSON.parse(event.data);if(data.error){showMessage(data.error);setStatus('Stream error')}}catch(_){}return}if(!mediaSource&&!setupMse())return;appendQueue.push(event.data);if(appendQueue.length>100)appendQueue.splice(1,appendQueue.length-100);if(!initQueued){initQueued=true;setStatus('Receiving H.264 video');hideMessage()}drainQueue()};ws.onerror=()=>setStatus('Video WebSocket error');ws.onclose=()=>{setStatus('Stream disconnected');showMessage('The desktop stream disconnected. Reconnecting…');updateTelemetry();reconnectTimer=setTimeout(connect,2500)}}
   function send(data){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data));else setStatus('Input unavailable: video WebSocket is not connected')}
-  function videoPoint(event){
-    const rect=video.getBoundingClientRect();if(!rect.width||!rect.height)return null;let px=event.clientX-rect.left,py=event.clientY-rect.top;const sourceW=video.videoWidth||rect.width,sourceH=video.videoHeight||rect.height,scale=Math.min(rect.width/sourceW,rect.height/sourceH),drawW=sourceW*scale,drawH=sourceH*scale,ox=(rect.width-drawW)/2,oy=(rect.height-drawH)/2;px=(px-ox)/drawW;py=(py-oy)/drawH;if(px<0||px>1||py<0||py>1)return null;return{x:px,y:py}
-  }
-  video.addEventListener('pointermove',e=>{const p=videoPoint(e);if(p)send({type:'move',x:p.x,y:p.y})});
-  video.addEventListener('pointerdown',e=>{e.preventDefault();video.setPointerCapture?.(e.pointerId);const p=videoPoint(e);if(p)send({type:'move',x:p.x,y:p.y});send({type:'mouse_down',button:e.button===2?'right':e.button===1?'middle':'left'})});
-  video.addEventListener('pointerup',e=>{e.preventDefault();send({type:'mouse_up',button:e.button===2?'right':e.button===1?'middle':'left'})});
+  function videoPoint(event){const rect=video.getBoundingClientRect();if(!rect.width||!rect.height)return null;let px=event.clientX-rect.left,py=event.clientY-rect.top;const sourceW=video.videoWidth||rect.width,sourceH=video.videoHeight||rect.height,scale=Math.min(rect.width/sourceW,rect.height/sourceH),drawW=sourceW*scale,drawH=sourceH*scale,ox=(rect.width-drawW)/2,oy=(rect.height-drawH)/2;px=(px-ox)/drawW;py=(py-oy)/drawH;if(px<0||px>1||py<0||py>1)return null;return{x:px,y:py}}
+  function showTouchHelp(){touchHelp.classList.add('visible');clearTimeout(touchHelpTimer);touchHelpTimer=setTimeout(()=>touchHelp.classList.remove('visible'),3000)}
+
+  video.addEventListener('pointerdown',e=>{
+    if(e.pointerType==='touch'){
+      e.preventDefault();video.setPointerCapture?.(e.pointerId);touches.set(e.pointerId,{x:e.clientX,y:e.clientY,lastX:e.clientX,lastY:e.clientY,moved:false});
+      if(touches.size>1){touchGroupMulti=true;touchGroupMoved=false;if(touchDragTimer){clearTimeout(touchDragTimer);touchDragTimer=null}if(touchDrag){send({type:'mouse_up',button:'left'});touchDrag=false}showTouchHelp();}
+      else{touchGroupMulti=false;touchGroupMoved=false;touchDrag=false;touchDragTimer=setTimeout(()=>{if(touches.size===1&&!touchGroupMoved&&!touchGroupMulti){send({type:'mouse_down',button:'left'});touchDrag=true}},300)}
+      showTouchHelp();return;
+    }
+    e.preventDefault();video.setPointerCapture?.(e.pointerId);const p=videoPoint(e);if(p)send({type:'move',x:p.x,y:p.y});send({type:'mouse_down',button:e.button===2?'right':e.button===1?'middle':'left'})
+  });
+  video.addEventListener('pointermove',e=>{
+    if(e.pointerType==='touch'){
+      const t=touches.get(e.pointerId);if(!t)return;e.preventDefault();const dx=e.clientX-t.lastX,dy=e.clientY-t.lastY;t.lastX=e.clientX;t.lastY=e.clientY;if(Math.abs(e.clientX-t.x)+Math.abs(e.clientY-t.y)>8){t.moved=true;touchGroupMoved=true;if(touchDragTimer){clearTimeout(touchDragTimer);touchDragTimer=null}}
+      if(touches.size>=2){send({type:'scroll',delta:-Math.max(-8,Math.min(8,dy/18))})}else if(!touchGroupMulti){send({type:'move_relative',dx:dx*2.2,dy:dy*2.2})}return;
+    }
+    const p=videoPoint(e);if(p)send({type:'move',x:p.x,y:p.y})
+  });
+  video.addEventListener('pointerup',e=>{
+    if(e.pointerType==='touch'){
+      e.preventDefault();const t=touches.get(e.pointerId);if(!t)return;touches.delete(e.pointerId);if(touchDrag){send({type:'mouse_up',button:'left'});touchDrag=false}if(touches.size===0){if(touchDragTimer){clearTimeout(touchDragTimer);touchDragTimer=null}if(touchGroupMulti){if(!touchGroupMoved)send({type:'mouse_down',button:'right'}),send({type:'mouse_up',button:'right'});}else if(!t.moved&&!touchGroupMoved){send({type:'mouse_down',button:'left'});send({type:'mouse_up',button:'left'})}touchGroupMulti=false;touchGroupMoved=false}return;
+    }
+    e.preventDefault();send({type:'mouse_up',button:e.button===2?'right':e.button===1?'middle':'left'})
+  });
+  video.addEventListener('pointercancel',e=>{if(e.pointerType==='touch'){touches.delete(e.pointerId);if(touchDrag){send({type:'mouse_up',button:'left'});touchDrag=false}if(!touches.size){clearTimeout(touchDragTimer);touchDragTimer=null;touchGroupMulti=false;touchGroupMoved=false}}else send({type:'mouse_up',button:'left'})});
   video.addEventListener('contextmenu',e=>e.preventDefault());
   video.addEventListener('wheel',e=>{e.preventDefault();send({type:'scroll',delta:-Math.sign(e.deltaY)*Math.min(10,Math.max(1,Math.round(Math.abs(e.deltaY)/40)))})},{passive:false});
   document.addEventListener('keydown',e=>{if(document.activeElement===typeText||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(e.key==='F11')return;e.preventDefault();send({type:'key_down',code:e.code})});
   document.addEventListener('keyup',e=>{if(document.activeElement===typeText||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(e.key==='F11')return;e.preventDefault();send({type:'key_up',code:e.code})});
   document.getElementById('testInput').addEventListener('click',async()=>{if(httpTestInProgress)return;httpTestInProgress=true;setStatus('Testing Windows cursor…');try{const response=await fetch('/input-test',{method:'POST',credentials:'same-origin',cache:'no-store'}),result=await response.json().catch(()=>({}));if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));setStatus('Cursor test passed · moved to '+result.x+', '+result.y)}catch(error){setStatus('Cursor test failed: '+(error.message||'request failed'))}finally{httpTestInProgress=false;updateTelemetry()}});
   document.getElementById('typeButton').addEventListener('click',()=>{typeText.classList.toggle('visible');if(typeText.classList.contains('visible')){typeText.value='';typeText.focus()}});
-  typeText.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();if(typeText.value)send({type:'type_text',text:typeText.value});typeText.value='';typeText.blur();typeText.classList.remove('visible')}else if(e.key==='Escape'){typeText.value='';typeText.blur();typeText.classList.remove('visible')}});
-  document.getElementById('fullscreen').addEventListener('click',()=>{if(document.fullscreenElement)document.exitFullscreen?.();else stage.requestFullscreen?.()});
+  document.getElementById('screenButton').addEventListener('click',async()=>{try{if(!document.fullscreenElement){await stage.requestFullscreen?.();}else{await document.exitFullscreen?.();}}catch(_){stage.classList.toggle('immersive')} });
+  document.addEventListener('fullscreenchange',()=>{stage.classList.toggle('immersive',Boolean(document.fullscreenElement));});
+  stage.addEventListener('dblclick',e=>{if(e.target===video&&!document.fullscreenElement)document.getElementById('screenButton').click()});
   stage.addEventListener('click',()=>stage.focus());
   window.addEventListener('beforeunload',()=>{try{ws?.close()}catch(_){}});
   startFrameMonitor();connect();updateTelemetry();
