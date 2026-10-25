@@ -39,14 +39,15 @@ app.config.update(
 )
 sock = Sock(app)
 
-# A dedicated event loop is required because Flask's request loop ends after each response.
 rtc_loop = asyncio.new_event_loop()
 rtc_peers: set[RTCPeerConnection] = set()
 rtc_peers_lock = threading.Lock()
 
+
 def _run_rtc_loop():
     asyncio.set_event_loop(rtc_loop)
     rtc_loop.run_forever()
+
 
 threading.Thread(target=_run_rtc_loop, name="webrtc-loop", daemon=True).start()
 
@@ -201,8 +202,6 @@ def read_ffmpeg_output(state: StreamState) -> None:
 
 
 def ffmpeg_command() -> list[str]:
-    # Fragmented MP4 over a WebSocket keeps the video path on HTTPS/TCP.
-    # That works through a normal HTTP tunnel; it does not need inbound UDP.
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-f", "gdigrab", "-draw_mouse", "1", "-framerate", "30", "-i", "desktop",
@@ -219,7 +218,6 @@ def ffmpeg_command() -> list[str]:
 
 
 class WindowsDesktopTrack(VideoStreamTrack):
-    """Capture the Windows desktop with FFmpeg and hand frames to aiortc's H.264 encoder."""
     def __init__(self):
         super().__init__()
         import ctypes
@@ -320,36 +318,17 @@ def webrtc_offer():
 
 def key_from_code(code: str):
     special = {
-        "Enter": keyboard.Key.enter,
-        "Escape": keyboard.Key.esc,
-        "Backspace": keyboard.Key.backspace,
-        "Tab": keyboard.Key.tab,
-        "Space": keyboard.Key.space,
-        "ShiftLeft": keyboard.Key.shift,
-        "ShiftRight": keyboard.Key.shift_r,
-        "ControlLeft": keyboard.Key.ctrl,
-        "ControlRight": keyboard.Key.ctrl_r,
-        "AltLeft": keyboard.Key.alt,
-        "AltRight": keyboard.Key.alt_r,
-        "MetaLeft": keyboard.Key.cmd,
-        "MetaRight": keyboard.Key.cmd_r,
-        "ArrowUp": keyboard.Key.up,
-        "ArrowDown": keyboard.Key.down,
-        "ArrowLeft": keyboard.Key.left,
-        "ArrowRight": keyboard.Key.right,
-        "Delete": keyboard.Key.delete,
-        "Home": keyboard.Key.home,
-        "End": keyboard.Key.end,
-        "PageUp": keyboard.Key.page_up,
-        "PageDown": keyboard.Key.page_down,
-        "Insert": keyboard.Key.insert,
-        "CapsLock": keyboard.Key.caps_lock,
-        "F1": keyboard.Key.f1, "F2": keyboard.Key.f2,
-        "F3": keyboard.Key.f3, "F4": keyboard.Key.f4,
-        "F5": keyboard.Key.f5, "F6": keyboard.Key.f6,
-        "F7": keyboard.Key.f7, "F8": keyboard.Key.f8,
-        "F9": keyboard.Key.f9, "F10": keyboard.Key.f10,
-        "F11": keyboard.Key.f11, "F12": keyboard.Key.f12,
+        "Enter": keyboard.Key.enter, "Escape": keyboard.Key.esc, "Backspace": keyboard.Key.backspace,
+        "Tab": keyboard.Key.tab, "Space": keyboard.Key.space, "ShiftLeft": keyboard.Key.shift,
+        "ShiftRight": keyboard.Key.shift_r, "ControlLeft": keyboard.Key.ctrl, "ControlRight": keyboard.Key.ctrl_r,
+        "AltLeft": keyboard.Key.alt, "AltRight": keyboard.Key.alt_r, "MetaLeft": keyboard.Key.cmd,
+        "MetaRight": keyboard.Key.cmd_r, "ArrowUp": keyboard.Key.up, "ArrowDown": keyboard.Key.down,
+        "ArrowLeft": keyboard.Key.left, "ArrowRight": keyboard.Key.right, "Delete": keyboard.Key.delete,
+        "Home": keyboard.Key.home, "End": keyboard.Key.end, "PageUp": keyboard.Key.page_up,
+        "PageDown": keyboard.Key.page_down, "Insert": keyboard.Key.insert, "CapsLock": keyboard.Key.caps_lock,
+        "F1": keyboard.Key.f1, "F2": keyboard.Key.f2, "F3": keyboard.Key.f3, "F4": keyboard.Key.f4,
+        "F5": keyboard.Key.f5, "F6": keyboard.Key.f6, "F7": keyboard.Key.f7, "F8": keyboard.Key.f8,
+        "F9": keyboard.Key.f9, "F10": keyboard.Key.f10, "F11": keyboard.Key.f11, "F12": keyboard.Key.f12,
     }
     if code in special:
         return special[code]
@@ -359,29 +338,9 @@ def key_from_code(code: str):
         return code[-1]
     if code.startswith("Numpad") and len(code) == 7 and code[-1].isdigit():
         return code[-1]
-    if code == "Minus":
-        return "-"
-    if code == "Equal":
-        return "="
-    if code == "Comma":
-        return ","
-    if code == "Period":
-        return "."
-    if code == "Slash":
-        return "/"
-    if code == "Semicolon":
-        return ";"
-    if code == "Quote":
-        return "'"
-    if code == "BracketLeft":
-        return "["
-    if code == "BracketRight":
-        return "]"
-    if code == "Backslash":
-        return "\\"
-    if code == "Backquote":
-        return "`"
-    return None
+    return {"Minus": "-", "Equal": "=", "Comma": ",", "Period": ".", "Slash": "/",
+            "Semicolon": ";", "Quote": "'", "BracketLeft": "[", "BracketRight": "]",
+            "Backslash": "\\", "Backquote": "`"}.get(code)
 
 
 def handle_input(message: dict, mouse_ctl: mouse.Controller, key_ctl: keyboard.Controller, width: int, height: int) -> None:
@@ -390,6 +349,14 @@ def handle_input(message: dict, mouse_ctl: mouse.Controller, key_ctl: keyboard.C
         x = max(0.0, min(1.0, float(message.get("x", 0))))
         y = max(0.0, min(1.0, float(message.get("y", 0))))
         mouse_ctl.position = (int(x * max(1, width - 1)), int(y * max(1, height - 1)))
+    elif kind == "move_relative":
+        dx = max(-500, min(500, float(message.get("dx", 0))))
+        dy = max(-500, min(500, float(message.get("dy", 0))))
+        current_x, current_y = mouse_ctl.position
+        mouse_ctl.position = (
+            max(0, min(width - 1, int(current_x + dx))),
+            max(0, min(height - 1, int(current_y + dy))),
+        )
     elif kind in {"mouse_down", "mouse_up"}:
         button_name = message.get("button", "left")
         button = {"left": mouse.Button.left, "right": mouse.Button.right, "middle": mouse.Button.middle}.get(button_name)
@@ -408,7 +375,6 @@ def handle_input(message: dict, mouse_ctl: mouse.Controller, key_ctl: keyboard.C
 
 
 def desktop_input_controllers():
-    """Create controllers and read the current Windows desktop dimensions."""
     import ctypes
     mouse_ctl = mouse.Controller()
     key_ctl = keyboard.Controller()
@@ -445,7 +411,6 @@ def input_test():
 
 @sock.route("/input")
 def input_websocket(ws):
-    """Dedicated input channel so mouse/keyboard control works during WebRTC video."""
     if not session.get("authenticated"):
         ws.close(reason="Authentication required")
         return
@@ -469,22 +434,16 @@ def input_websocket(ws):
                     if message.get("type") == "test_cursor":
                         test_x, test_y = width // 2, height // 2
                         mouse_ctl.position = (test_x, test_y)
-                        ws.send(json.dumps({
-                            "type": "input_test",
-                            "ok": mouse_ctl.position == (test_x, test_y),
-                            "x": test_x,
-                            "y": test_y,
-                        }))
                     else:
                         handle_input(message, mouse_ctl, key_ctl, width, height)
             except (ValueError, TypeError, KeyError, OverflowError):
-                pass
+                continue
     except Exception:
         pass
 
 
 @sock.route("/ws")
-def websocket(ws):
+def stream_websocket(ws):
     if not session.get("authenticated"):
         ws.close(reason="Authentication required")
         return
@@ -492,33 +451,24 @@ def websocket(ws):
     state = StreamState()
     try:
         state.process = subprocess.Popen(
-            ffmpeg_command(),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            bufsize=0,
+            ffmpeg_command(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, bufsize=0,
         )
-    except Exception as exc:
-        ws.send(json.dumps({"error": f"Could not start FFmpeg: {exc}"}))
-        return
+        reader = threading.Thread(target=read_ffmpeg_output, args=(state,), daemon=True)
+        reader.start()
 
-    threading.Thread(target=read_ffmpeg_output, args=(state,), daemon=True).start()
-    if not state.init_ready.wait(timeout=20) or not state.init_segment:
-        error = state.error or "FFmpeg did not produce a video stream. The runner may not have an accessible desktop."
-        ws.send(json.dumps({"error": error}))
-        state.process.kill()
-        return
+        if not state.init_ready.wait(timeout=10):
+            ws.send(json.dumps({"error": "Timed out waiting for the desktop video encoder."}))
+            return
+        if state.error and not state.init_segment:
+            ws.send(json.dumps({"error": f"Video encoder failed: {state.error}"}))
+            return
+        if state.init_segment is None:
+            ws.send(json.dumps({"error": "Video encoder produced no initialization segment."}))
+            return
 
-    try:
         ws.send(state.init_segment)
-        mouse_ctl = mouse.Controller()
-        key_ctl = keyboard.Controller()
-        # GitHub-hosted Windows runners normally use a 1024x768 desktop.
-        # Use Win32 metrics so input coordinates follow the actual desktop.
-        import ctypes
-        user32 = ctypes.windll.user32
-        width = int(user32.GetSystemMetrics(0))
-        height = int(user32.GetSystemMetrics(1))
+        mouse_ctl, key_ctl, width, height = desktop_input_controllers()
         while state.process.poll() is None:
             try:
                 raw = ws.receive(timeout=0.01)
@@ -526,10 +476,9 @@ def websocket(ws):
                 raw = None
             if raw is not None:
                 try:
-                    if isinstance(raw, str):
-                        message = json.loads(raw)
-                        if isinstance(message, dict):
-                            handle_input(message, mouse_ctl, key_ctl, width, height)
+                    message = json.loads(raw) if isinstance(raw, str) else {}
+                    if isinstance(message, dict):
+                        handle_input(message, mouse_ctl, key_ctl, width, height)
                 except (ValueError, TypeError, KeyError, OverflowError):
                     pass
 
@@ -539,12 +488,7 @@ def websocket(ws):
             except queue.Empty:
                 pass
     except Exception:
-        # Browser disconnects are expected; the stream is session-scoped.
         pass
     finally:
         if state.process and state.process.poll() is None:
             state.process.kill()
-
-
-if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=8080, threaded=True, use_reloader=False)
