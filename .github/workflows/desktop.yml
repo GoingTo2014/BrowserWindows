@@ -6,9 +6,11 @@ on:
 permissions:
   contents: read
 
+# Do not let a second manual start silently cancel an already-running desktop.
+# A BrowserWindows session is intentionally long-lived.
 concurrency:
   group: browserwindows-session
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   desktop:
@@ -78,7 +80,7 @@ jobs:
           python -m pip install --disable-pip-version-check --only-binary=av -r requirements.txt
           python -c "import aiortc, av, numpy, flask_sock; print('WebRTC dependencies OK; aiortc=' + aiortc.__version__ + ', PyAV=' + av.__version__)"
 
-      - name: Start WebRTC-first desktop streamer with TCP fallback and tunnel
+      - name: Start BrowserWindows desktop streamer and tunnel
         shell: pwsh
         env:
           DESKTOP_PASSWORD: ${{ secrets.DESKTOP_PASSWORD }}
@@ -130,14 +132,14 @@ jobs:
           }
 
           $summary = @"
-          ## BrowserWindows WebRTC-first session is starting
+          ## BrowserWindows session is running
 
           **Desktop URL:** $publicUrl
 
-          **Video:** WebRTC/H.264 is attempted first. If WebRTC negotiation or video connectivity fails, the browser switches to the existing H.264 WebSocket/TCP fallback.
+          **Video:** H.264 over the existing WebSocket/TCP path. The browser uses this same WebSocket for desktop input, while the cursor test uses the separate HTTP test endpoint so it cannot interfere with the stream.
 
           Sign in with the password stored in the repository secret `DESKTOP_PASSWORD`.
-          This is a temporary Windows Server 2022 runner, not Windows 10. Direct UDP connectivity is not guaranteed on GitHub-hosted runners. The session ends when this workflow is cancelled or reaches its time limit.
+          This is a temporary Windows Server 2022 runner, not Windows 10. The session ends when this workflow is cancelled, the runner shuts down, or the 350-minute workflow timeout is reached.
           "@
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           Write-Host "BrowserWindows URL: $publicUrl"
@@ -147,8 +149,16 @@ jobs:
             while (-not $server.HasExited -and -not $tunnel.HasExited) {
               Start-Sleep -Seconds 10
             }
-            if ($server.HasExited) { throw "The desktop streamer stopped unexpectedly." }
-            if ($tunnel.HasExited) { throw "The Cloudflare tunnel stopped unexpectedly." }
+            if ($server.HasExited) {
+              if (Test-Path $serverOut) { Get-Content $serverOut }
+              if (Test-Path $serverErr) { Get-Content $serverErr }
+              throw "The desktop streamer stopped unexpectedly."
+            }
+            if ($tunnel.HasExited) {
+              if (Test-Path $tunnelOut) { Get-Content $tunnelOut }
+              if (Test-Path $tunnelErr) { Get-Content $tunnelErr }
+              throw "The Cloudflare tunnel stopped unexpectedly."
+            }
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
             Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue
