@@ -407,6 +407,42 @@ def handle_input(message: dict, mouse_ctl: mouse.Controller, key_ctl: keyboard.C
             key_ctl.type(value)
 
 
+def desktop_input_controllers():
+    """Create controllers and read the current Windows desktop dimensions."""
+    import ctypes
+    mouse_ctl = mouse.Controller()
+    key_ctl = keyboard.Controller()
+    user32 = ctypes.windll.user32
+    return mouse_ctl, key_ctl, int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+
+
+@app.post("/input-event")
+def input_event():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return {"error": "Expected a JSON input event."}, 400
+    try:
+        mouse_ctl, key_ctl, width, height = desktop_input_controllers()
+        handle_input(payload, mouse_ctl, key_ctl, width, height)
+        return {"ok": True}
+    except Exception as exc:
+        app.logger.exception("HTTP desktop input failed")
+        return {"error": f"Desktop input failed: {str(exc)[:180]}"}, 500
+
+
+@app.post("/input-test")
+def input_test():
+    try:
+        mouse_ctl, _, width, height = desktop_input_controllers()
+        test_x, test_y = width // 2, height // 2
+        mouse_ctl.position = (test_x, test_y)
+        ok = mouse_ctl.position == (test_x, test_y)
+        return {"type": "input_test", "ok": ok, "x": test_x, "y": test_y}
+    except Exception as exc:
+        app.logger.exception("HTTP cursor test failed")
+        return {"type": "input_test", "ok": False, "error": f"Cursor test failed: {str(exc)[:180]}"}, 500
+
+
 @sock.route("/input")
 def input_websocket(ws):
     """Dedicated input channel so mouse/keyboard control works during WebRTC video."""
