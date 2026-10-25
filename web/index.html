@@ -17,6 +17,8 @@
     button,video{-webkit-tap-highlight-color:transparent}
     #message{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(90%,600px);padding:14px 18px;border:1px solid #3f3f46;border-radius:12px;background:#18181bee;color:#e4e4e7;text-align:center;line-height:1.5}
     #message.hidden{display:none}
+    #typeText{position:absolute;z-index:3;left:10px;right:10px;bottom:10px;width:calc(100% - 20px);padding:12px;border:1px solid #52525b;border-radius:10px;background:#18181b;color:#fff;font:inherit;display:none}
+    #typeText.visible{display:block}
     @media(max-width:600px){header{gap:7px;padding:0 8px}.brand{font-size:14px}.status{font-size:11px}button{padding:6px 8px;font-size:12px}}
   </style>
 </head>
@@ -30,6 +32,7 @@
   <main id="stage" tabindex="0">
     <video id="screen" autoplay muted playsinline tabindex="0"></video>
     <div id="message">Connecting to the Windows desktop…</div>
+    <input id="typeText" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Tap here to type on Windows…" aria-label="Type text on Windows">
   </main>
 <script>
 (() => {
@@ -207,6 +210,25 @@
       ws.send(JSON.stringify(data));
     }
   }
+
+  const typeText = document.getElementById('typeText');
+  typeText.addEventListener('focus', () => typeText.classList.add('visible'));
+  typeText.addEventListener('input', () => {
+    const value = typeText.value;
+    if (value) send({type:'type_text', text:value.slice(0, 2000)});
+    typeText.value = '';
+  });
+  typeText.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      send({type:'key_down', code:'Enter'});
+      send({type:'key_up', code:'Enter'});
+      typeText.blur();
+    }
+    if (event.key === 'Escape') {
+      typeText.blur();
+    }
+  });
 
   function pointerPosition(event) {
     const rect = video.getBoundingClientRect();
