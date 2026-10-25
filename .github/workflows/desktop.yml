@@ -1,0 +1,132 @@
+name: Start BrowserWindows session
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browserwindows-session
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    # This is Windows Server 2022, not a Windows 10 VM.
+    runs-on: windows-2022
+    timeout-minutes: 350
+
+    steps:
+      - name: Check out BrowserWindows
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Validate password secret
+        shell: pwsh
+        env:
+          DESKTOP_PASSWORD: ${{ secrets.DESKTOP_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DESKTOP_PASSWORD)) {
+            throw "Missing DESKTOP_PASSWORD. Add it under Settings > Secrets and variables > Actions."
+          }
+          if ($env:DESKTOP_PASSWORD.Length -lt 12) {
+            throw "DESKTOP_PASSWORD must be at least 12 characters long."
+          }
+          "Desktop password secret is configured."
+
+      - name: Install FFmpeg
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-essentials.zip"
+          $destination = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile $archive
+          Expand-Archive -Path $archive -DestinationPath $destination -Force
+          $ffmpeg = Get-ChildItem -Path $destination -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+          if (-not $ffmpeg) { throw "ffmpeg.exe was not found in the downloaded archive." }
+          $ffmpeg.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $ffmpeg.FullName -version | Select-Object -First 1
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Start protected desktop streamer and tunnel
+        shell: pwsh
+        env:
+          DESKTOP_PASSWORD: ${{ secrets.DESKTOP_PASSWORD }}
+          COOKIE_SECURE: "1"
+        run: |
+          $env:APP_SECRET = [guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N")
+
+          $serverOut = Join-Path $env:RUNNER_TEMP "browserwindows-server.log"
+          $serverErr = Join-Path $env:RUNNER_TEMP "browserwindows-server.err"
+          $server = Start-Process -FilePath "python" -ArgumentList @("server.py") -WorkingDirectory $env:GITHUB_WORKSPACE -PassThru -WindowStyle Hidden -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr
+
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:8080/login" -UseBasicParsing -TimeoutSec 3
+              if ($response.StatusCode -eq 200) { $ready = $true; break }
+            } catch {}
+            if ($server.HasExited) { break }
+          }
+          if (-not $ready) {
+            if (Test-Path $serverOut) { Get-Content $serverOut }
+            if (Test-Path $serverErr) { Get-Content $serverErr }
+            throw "The desktop streamer did not start. See server logs above."
+          }
+
+          $cloudflared = Join-Path $env:RUNNER_TEMP "cloudflared.exe"
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" -OutFile $cloudflared
+          $tunnelOut = Join-Path $env:RUNNER_TEMP "browserwindows-tunnel.log"
+          $tunnelErr = Join-Path $env:RUNNER_TEMP "browserwindows-tunnel.err"
+          $tunnel = Start-Process -FilePath $cloudflared -ArgumentList @("tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:8080") -PassThru -WindowStyle Hidden -RedirectStandardOutput $tunnelOut -RedirectStandardError $tunnelErr
+
+          $publicUrl = $null
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep -Seconds 2
+            $logs = ""
+            foreach ($file in @($tunnelOut, $tunnelErr)) {
+              if (Test-Path $file) { $logs += (Get-Content $file -Raw -ErrorAction SilentlyContinue) + "`n" }
+            }
+            $match = [regex]::Match($logs, "https://[a-z0-9-]+\.trycloudflare\.com")
+            if ($match.Success) { $publicUrl = $match.Value; break }
+            if ($tunnel.HasExited) { break }
+          }
+
+          if (-not $publicUrl) {
+            if (Test-Path $tunnelOut) { Get-Content $tunnelOut }
+            if (Test-Path $tunnelErr) { Get-Content $tunnelErr }
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            throw "Could not obtain a Cloudflare Quick Tunnel URL."
+          }
+
+          $summary = @"
+          ## BrowserWindows session is starting
+
+          **Desktop URL:** $publicUrl
+
+          Sign in with the password stored in the repository secret `DESKTOP_PASSWORD`.
+          This is a temporary Windows Server 2022 runner, not Windows 10. The session ends when this workflow is cancelled or reaches its time limit.
+          "@
+          $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host "BrowserWindows URL: $publicUrl"
+          Write-Host "The password is not printed in the logs."
+
+          try {
+            while (-not $server.HasExited -and -not $tunnel.HasExited) {
+              Start-Sleep -Seconds 10
+            }
+            if ($server.HasExited) { throw "The desktop streamer stopped unexpectedly." }
+            if ($tunnel.HasExited) { throw "The Cloudflare tunnel stopped unexpectedly." }
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $tunnel.Id -Force -ErrorAction SilentlyContinue
+          }
