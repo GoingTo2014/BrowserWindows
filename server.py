@@ -401,6 +401,10 @@ def handle_input(message: dict, mouse_ctl: mouse.Controller, key_ctl: keyboard.C
         key = key_from_code(str(message.get("code", "")))
         if key is not None:
             (key_ctl.press if kind == "key_down" else key_ctl.release)(key)
+    elif kind == "type_text":
+        value = message.get("text", "")
+        if isinstance(value, str) and len(value) <= 2000:
+            key_ctl.type(value)
 
 
 @sock.route("/input")
