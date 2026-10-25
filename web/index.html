@@ -11,9 +11,10 @@
     header{min-height:44px;display:flex;align-items:center;gap:10px;padding:6px 12px;background:#18181b;border-bottom:1px solid #303038;flex-wrap:wrap}
     .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:100px}.telemetry{font-size:11px;color:#a1a1aa;white-space:nowrap;font-variant-numeric:tabular-nums}
     button{border:1px solid #454550;border-radius:8px;background:#27272a;color:#f4f4f5;padding:7px 10px;font:inherit;cursor:pointer}
-    #stage{height:calc(100dvh - 56px);width:100%;display:grid;place-items:center;position:relative;outline:none;min-width:0;min-height:0;overflow:hidden}
+    #stage{height:auto;flex:1;width:100%;display:grid;place-items:center;position:relative;outline:none;min-width:0;min-height:0;overflow:hidden}
     video{display:block;width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;outline:none;touch-action:none;user-select:none;-webkit-user-select:none}
-    body{height:100dvh}
+    body{height:100dvh;display:flex;flex-direction:column}
+    header{flex:0 0 auto}
     button,video{-webkit-tap-highlight-color:transparent}
     #message{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(90%,600px);padding:14px 18px;border:1px solid #3f3f46;border-radius:12px;background:#18181bee;color:#e4e4e7;text-align:center;line-height:1.5}
     #message.hidden{display:none}
@@ -64,8 +65,9 @@
     telemetry.textContent = 'FPS: ' + (frameMonitorStarted ? fps : '—') + ' · Frame: ' + frameText + ' · Input: ' + (inputConnected ? 'connected' : 'disconnected');
     if (lastFrameAt && age > 3) {
       telemetry.style.color = '#f87171';
-      if (!message.classList.contains('hidden')) return;
-      showMessage('Stream frozen: no new video frames for ' + age.toFixed(1) + ' seconds.');
+      if (message.classList.contains('hidden') || !message.textContent.startsWith('Stream frozen:')) {
+        showMessage('Stream frozen: no new video frames for ' + age.toFixed(1) + ' seconds.');
+      }
     } else {
       telemetry.style.color = inputConnected ? '#a1a1aa' : '#fbbf24';
       if (lastFrameAt && age <= 3 && message.textContent.startsWith('Stream frozen:')) hideMessage();
