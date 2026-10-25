@@ -8,14 +8,13 @@
   <style>
     :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f4f4f5;background:#09090b}
     *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#09090b}
-    header{min-height:44px;display:flex;align-items:center;gap:10px;padding:6px 12px;background:#18181b;border-bottom:1px solid #303038;flex-wrap:wrap}
+    body{height:100dvh;display:flex;flex-direction:column}
+    header{min-height:44px;display:flex;align-items:center;gap:10px;padding:6px 12px;background:#18181b;border-bottom:1px solid #303038;flex:0 0 auto;flex-wrap:wrap}
     .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:100px}.telemetry{font-size:11px;color:#a1a1aa;white-space:nowrap;font-variant-numeric:tabular-nums}
     button{border:1px solid #454550;border-radius:8px;background:#27272a;color:#f4f4f5;padding:7px 10px;font:inherit;cursor:pointer}
+    button,video{-webkit-tap-highlight-color:transparent}
     #stage{height:auto;flex:1;width:100%;display:grid;place-items:center;position:relative;outline:none;min-width:0;min-height:0;overflow:hidden}
     video{display:block;width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;outline:none;touch-action:none;user-select:none;-webkit-user-select:none}
-    body{height:100dvh;display:flex;flex-direction:column}
-    header{flex:0 0 auto}
-    button,video{-webkit-tap-highlight-color:transparent}
     #message{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);max-width:min(90%,600px);padding:14px 18px;border:1px solid #3f3f46;border-radius:12px;background:#18181bee;color:#e4e4e7;text-align:center;line-height:1.5}
     #message.hidden{display:none}
     #typeText{position:absolute;z-index:3;left:10px;right:10px;bottom:10px;width:calc(100% - 20px);padding:12px;border:1px solid #52525b;border-radius:10px;background:#18181b;color:#fff;font:inherit;display:none}
@@ -40,411 +39,61 @@
   </main>
 <script>
 (() => {
-  const video = document.getElementById('screen');
-  const stage = document.getElementById('stage');
-  const status = document.getElementById('status');
-  const telemetry = document.getElementById('telemetry');
-  let inputConnected = false;
-  let lastFrameAt = 0;
-  let streamExpectedAt = 0;
-  let frameCount = 0;
-  let fps = 0;
-  let frameMonitorStarted = false;
-  let lastFrameCounterAt = performance.now();
-  const message = document.getElementById('message');
-  let ws, inputWs, mediaSource, sourceBuffer, objectUrl, peerConnection;
-  let fallbackStarted = false;
-  let webrtcVideoReceived = false;
-  let webrtcTimer;
-  const appendQueue = [];
-  let initQueued = false;
-
-  function setStatus(text) { status.textContent = text; }
-  function updateTelemetry() {
-    const now = performance.now();
-    const age = lastFrameAt ? (now - lastFrameAt) / 1000 : null;
-    const waitingAge = streamExpectedAt ? (now - streamExpectedAt) / 1000 : null;
-    const frameText = age !== null ? (age > 3 ? 'FROZEN ' + age.toFixed(1) + 's' : age.toFixed(1) + 's ago') : waitingAge !== null ? 'no frames ' + waitingAge.toFixed(1) + 's' : '—';
-    telemetry.textContent = 'FPS: ' + (frameMonitorStarted ? fps : '—') + ' · Frame: ' + frameText + ' · Input: ' + (inputConnected ? 'WebSocket' : 'HTTP fallback');
-    if ((lastFrameAt && age > 3) || (!lastFrameAt && waitingAge !== null && waitingAge > 3)) {
-      telemetry.style.color = '#f87171';
-      const detail = lastFrameAt ? 'no new video frames for ' + age.toFixed(1) + ' seconds.' : 'no video frames received after ' + waitingAge.toFixed(1) + ' seconds.';
-      if (message.classList.contains('hidden') || !message.textContent.startsWith('Stream frozen:')) {
-        showMessage('Stream frozen: ' + detail);
-      }
-    } else {
-      telemetry.style.color = inputConnected ? '#a1a1aa' : '#fbbf24';
-      if (lastFrameAt && age <= 3 && message.textContent.startsWith('Stream frozen:')) hideMessage();
-    }
+  const video=document.getElementById('screen'),stage=document.getElementById('stage'),status=document.getElementById('status'),telemetry=document.getElementById('telemetry'),message=document.getElementById('message'),typeText=document.getElementById('typeText');
+  let ws=null,mediaSource=null,sourceBuffer=null,streamExpectedAt=0,lastFrameAt=0,frameCount=0,fps=0,lastFrameCounterAt=performance.now(),appendQueue=[],initQueued=false,reconnectTimer=null,httpTestInProgress=false;
+  function setStatus(text){status.textContent=text}
+  function showMessage(text){message.textContent=text;message.classList.remove('hidden')}
+  function hideMessage(){message.classList.add('hidden')}
+  function noteFrame(){lastFrameAt=performance.now();frameCount++}
+  function updateTelemetry(){
+    const now=performance.now(),age=lastFrameAt?(now-lastFrameAt)/1000:null,wait=streamExpectedAt?(now-streamExpectedAt)/1000:null;
+    const frameText=age!==null?(age>3?'FROZEN '+age.toFixed(1)+'s':age.toFixed(1)+'s ago'):(wait!==null?'no frames '+wait.toFixed(1)+'s':'—');
+    telemetry.textContent='FPS: '+fps+' · Frame: '+frameText+' · Input: '+(ws&&ws.readyState===WebSocket.OPEN?'WebSocket':'disconnected');
+    telemetry.style.color=ws&&ws.readyState===WebSocket.OPEN?'#a1a1aa':'#fbbf24';
+    if(age!==null&&age>3){if(message.classList.contains('hidden')||!message.textContent.startsWith('Stream frozen:'))showMessage('Stream frozen: no new video frames for '+age.toFixed(1)+' seconds.')}
+    else if(lastFrameAt&&age<=3&&message.textContent.startsWith('Stream frozen:'))hideMessage()
   }
-  function noteVideoFrame() { lastFrameAt = performance.now(); frameCount++; }
-  function startFrameMonitor() {
-    if (typeof video.requestVideoFrameCallback === 'function') {
-      const watch = () => { noteVideoFrame(); video.requestVideoFrameCallback(watch); };
-      video.requestVideoFrameCallback(watch);
-    } else {
-      const watch = () => {
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.paused) noteVideoFrame();
-        requestAnimationFrame(watch);
-      };
-      requestAnimationFrame(watch);
-    }
-    setInterval(() => {
-      const now = performance.now();
-      fps = Math.round(frameCount * 1000 / Math.max(1, now - lastFrameCounterAt));
-      frameCount = 0;
-      lastFrameCounterAt = now;
-      frameMonitorStarted = true;
-      updateTelemetry();
-    }, 1000);
+  function startFrameMonitor(){
+    if(typeof video.requestVideoFrameCallback==='function'){const watch=()=>{noteFrame();video.requestVideoFrameCallback(watch)};video.requestVideoFrameCallback(watch)}
+    else{const watch=()=>{if(video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA&&!video.paused)noteFrame();requestAnimationFrame(watch)};requestAnimationFrame(watch)}
+    setInterval(()=>{const now=performance.now();fps=Math.round(frameCount*1000/Math.max(1,now-lastFrameCounterAt));frameCount=0;lastFrameCounterAt=now;updateTelemetry()},1000)
   }
-  function showMessage(text) { message.textContent = text; message.classList.remove('hidden'); }
-  function hideMessage() { message.classList.add('hidden'); }
-
-  function drainQueue() {
-    if (!sourceBuffer || sourceBuffer.updating || appendQueue.length === 0) return;
-    try {
-      sourceBuffer.appendBuffer(appendQueue.shift());
-    } catch (error) {
-      setStatus('Video buffer error');
-      console.error(error);
-    }
+  function drainQueue(){if(!sourceBuffer||sourceBuffer.updating||!appendQueue.length)return;try{sourceBuffer.appendBuffer(appendQueue.shift())}catch(error){console.error(error);setStatus('Video buffer error')}}
+  function setupMse(){
+    if(!('MediaSource' in window)||!MediaSource.isTypeSupported('video/mp4; codecs="avc1.42C01E"')){showMessage('This browser does not support the required H.264 Media Source Extensions.');setStatus('Unsupported browser');return false}
+    mediaSource=new MediaSource();video.src=URL.createObjectURL(mediaSource);
+    mediaSource.addEventListener('sourceopen',()=>{if(sourceBuffer)return;sourceBuffer=mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42C01E"');sourceBuffer.mode='segments';sourceBuffer.addEventListener('updateend',()=>{const ranges=sourceBuffer.buffered;if(ranges.length){const end=ranges.end(ranges.length-1);if(video.currentTime<end-1.25)video.currentTime=Math.max(0,end-0.25);if(end>8&&!sourceBuffer.updating){try{sourceBuffer.remove(0,end-4)}catch(_){}}if(video.paused)video.play().catch(()=>{})}drainQueue()});drainQueue()},{once:true});
+    return true
   }
-
-  function setupMse() {
-    if (!('MediaSource' in window) || !MediaSource.isTypeSupported('video/mp4; codecs="avc1.42C01E"')) {
-      showMessage('This browser does not support the required H.264 Media Source Extensions.');
-      setStatus('Unsupported browser');
-      return;
-    }
-    mediaSource = new MediaSource();
-    objectUrl = URL.createObjectURL(mediaSource);
-    video.src = objectUrl;
-    mediaSource.addEventListener('sourceopen', () => {
-      if (sourceBuffer) return;
-      sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42C01E"');
-      sourceBuffer.mode = 'segments';
-      sourceBuffer.addEventListener('updateend', () => {
-        const ranges = sourceBuffer.buffered;
-        if (ranges.length) {
-          const end = ranges.end(ranges.length - 1);
-          if (video.currentTime < end - 1.25) {
-            video.currentTime = Math.max(0, end - 0.25);
-          }
-          if (end > 8 && !sourceBuffer.updating) {
-            try { sourceBuffer.remove(0, end - 4); } catch (_) {}
-          }
-          if (video.paused) video.play().catch(() => {});
-        }
-        drainQueue();
-      });
-      drainQueue();
-    }, {once:true});
+  function connect(){
+    if(ws&&(ws.readyState===WebSocket.CONNECTING||ws.readyState===WebSocket.OPEN))return;
+    clearTimeout(reconnectTimer);initQueued=false;appendQueue=[];streamExpectedAt=0;lastFrameAt=0;
+    if(sourceBuffer){try{sourceBuffer.abort()}catch(_){}sourceBuffer=null}mediaSource=null;video.removeAttribute('src');video.load();
+    setStatus('Connecting to H.264 stream…');showMessage('Connecting to the Windows desktop…');
+    ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');ws.binaryType='arraybuffer';
+    ws.onopen=()=>{streamExpectedAt=performance.now();setStatus('Connected · starting H.264 stream');updateTelemetry()};
+    ws.onmessage=event=>{if(typeof event.data==='string'){try{const data=JSON.parse(event.data);if(data.error){showMessage(data.error);setStatus('Stream error')}}catch(_){}return}if(!mediaSource&&!setupMse())return;appendQueue.push(event.data);if(appendQueue.length>100)appendQueue.splice(1,appendQueue.length-100);if(!initQueued){initQueued=true;setStatus('Receiving H.264 video');hideMessage()}drainQueue()};
+    ws.onerror=()=>setStatus('Video WebSocket error');
+    ws.onclose=()=>{setStatus('Stream disconnected');showMessage('The desktop stream disconnected. Reconnecting…');updateTelemetry();reconnectTimer=setTimeout(connect,2500)};
   }
-
-  function connectTcp() {
-    if (fallbackStarted) return;
-    fallbackStarted = true;
-    clearTimeout(webrtcTimer);
-    if (peerConnection) { peerConnection.close(); peerConnection = null; }
-    video.srcObject = null;
-    setStatus('Using TCP fallback…');
-    showMessage('Connecting to the Windows desktop…');
-    ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
-    ws.binaryType = 'arraybuffer';
-    ws.onopen = () => { streamExpectedAt = performance.now(); setStatus('Connected · starting H.264 stream'); updateTelemetry(); };
-    ws.onmessage = event => {
-      if (typeof event.data === 'string') {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.error) {
-            showMessage(data.error);
-            setStatus('Stream error');
-          }
-        } catch (_) {}
-        return;
-      }
-      if (!mediaSource) setupMse();
-      if (mediaSource) {
-        appendQueue.push(event.data);
-        if (appendQueue.length > 100) {
-          appendQueue.splice(1, appendQueue.length - 100);
-        }
-        if (initQueued === false) {
-          initQueued = true;
-          setStatus('Receiving H.264 video');
-          hideMessage();
-        }
-        drainQueue();
-      }
-    };
-    ws.onerror = () => setStatus('Connection error');
-    ws.onclose = () => {
-      setStatus('Disconnected');
-      showMessage('The desktop stream disconnected. Refresh this page after checking the GitHub Actions run.');
-    };
+  function send(data){if(ws&&ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify(data));else setStatus('Input unavailable: video WebSocket is not connected')}
+  function videoPoint(event){
+    const rect=video.getBoundingClientRect();if(!rect.width||!rect.height)return null;let px=event.clientX-rect.left,py=event.clientY-rect.top;const sourceW=video.videoWidth||rect.width,sourceH=video.videoHeight||rect.height,scale=Math.min(rect.width/sourceW,rect.height/sourceH),drawW=sourceW*scale,drawH=sourceH*scale,ox=(rect.width-drawW)/2,oy=(rect.height-drawH)/2;px=(px-ox)/drawW;py=(py-oy)/drawH;if(px<0||px>1||py<0||py>1)return null;return{x:px,y:py}
   }
-
-  async function connectWebRtc() {
-    setStatus('Trying WebRTC/UDP…');
-    showMessage('Trying low-latency WebRTC video. TCP fallback will start automatically if UDP is unavailable.');
-    try {
-      peerConnection = new RTCPeerConnection({
-        iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
-      });
-      peerConnection.addTransceiver('video', {direction: 'recvonly'});
-      peerConnection.ontrack = event => {
-        if (fallbackStarted) return;
-        streamExpectedAt = performance.now();
-        video.srcObject = event.streams[0] || new MediaStream([event.track]);
-        video.play().catch(() => {});
-        event.track.onunmute = () => {
-          webrtcVideoReceived = true;
-          clearTimeout(webrtcTimer);
-          hideMessage();
-          setStatus('WebRTC video receiving');
-        };
-        setStatus('WebRTC connected · waiting for video');
-      };
-      peerConnection.onconnectionstatechange = () => {
-        if (peerConnection && peerConnection.connectionState === 'connected') {
-          setStatus('WebRTC connected · waiting for video');
-        } else if (peerConnection && ['failed','closed'].includes(peerConnection.connectionState) && !fallbackStarted) {
-          connectTcp();
-        }
-      };
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      await Promise.race([
-        new Promise(resolve => {
-          if (peerConnection.iceGatheringState === 'complete') resolve();
-          else peerConnection.addEventListener('icegatheringstatechange', () => {
-            if (peerConnection.iceGatheringState === 'complete') resolve();
-          }, {once:false});
-        }),
-        new Promise(resolve => setTimeout(resolve, 5000))
-      ]);
-      const response = await fetch('/offer', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        credentials: 'same-origin',
-        body: JSON.stringify({type:peerConnection.localDescription.type, sdp:peerConnection.localDescription.sdp})
-      });
-      if (!response.ok) {
-        const details = await response.json().catch(() => ({}));
-        throw new Error(details.error || 'WebRTC negotiation failed');
-      }
-      const answer = await response.json();
-      await peerConnection.setRemoteDescription(answer);
-      webrtcTimer = setTimeout(() => {
-        if (!fallbackStarted && !webrtcVideoReceived) connectTcp();
-      }, 12000);
-    } catch (error) {
-      console.warn('WebRTC unavailable; switching to TCP:', error);
-      connectTcp();
-    }
-  }
-
-  let inputReconnectTimer = null;
-  let httpMovePending = false;
-  let lastHttpMoveAt = 0;
-
-  function connectInput() {
-    if (inputWs && (inputWs.readyState === WebSocket.CONNECTING || inputWs.readyState === WebSocket.OPEN)) return;
-    try {
-      inputWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/input');
-    } catch (error) {
-      inputConnected = false;
-      setStatus('Input WebSocket unavailable; using HTTP fallback');
-      updateTelemetry();
-      scheduleInputReconnect();
-      return;
-    }
-    inputWs.onopen = () => {
-      inputConnected = true;
-      setStatus('Input connected (WebSocket)');
-      updateTelemetry();
-    };
-    inputWs.onmessage = event => {
-      if (typeof event.data !== 'string') return;
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'input_test') {
-          setStatus(data.ok ? 'Cursor test acknowledged by Windows' : 'Cursor test failed: Windows did not confirm cursor position');
-        }
-      } catch (_) {}
-    };
-    inputWs.onclose = event => {
-      inputConnected = false;
-      setStatus('Input WebSocket closed (' + event.code + (event.reason ? ': ' + event.reason : '') + '); HTTP fallback active');
-      updateTelemetry();
-      scheduleInputReconnect();
-    };
-    inputWs.onerror = () => {
-      inputConnected = false;
-      setStatus('Input WebSocket error; HTTP fallback active');
-      updateTelemetry();
-    };
-  }
-
-  function scheduleInputReconnect() {
-    if (inputReconnectTimer) clearTimeout(inputReconnectTimer);
-    inputReconnectTimer = setTimeout(() => {
-      inputReconnectTimer = null;
-      connectInput();
-    }, 2500);
-  }
-
-  async function sendHttpInput(data) {
-    if (data.type === 'move') {
-      const now = performance.now();
-      if (httpMovePending || now - lastHttpMoveAt < 40) return;
-      httpMovePending = true;
-      lastHttpMoveAt = now;
-    }
-    try {
-      const response = await fetch('/input-event', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        credentials: 'same-origin',
-        body: JSON.stringify(data)
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.ok) {
-        setStatus('HTTP input failed: ' + (result.error || ('HTTP ' + response.status)));
-      } else if (!inputConnected) {
-        setStatus('Input working via HTTP fallback');
-      }
-    } catch (error) {
-      setStatus('Input failed: ' + (error.message || 'network error'));
-    } finally {
-      if (data.type === 'move') httpMovePending = false;
-    }
-  }
-
-  function send(data) {
-    if (inputWs && inputWs.readyState === WebSocket.OPEN) {
-      inputWs.send(JSON.stringify(data));
-    } else if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(data));
-    } else {
-      sendHttpInput(data);
-    }
-  }
-
-  document.getElementById('testInput').addEventListener('click', async () => {
-    if (inputWs && inputWs.readyState === WebSocket.OPEN) {
-      send({type:'test_cursor'});
-      setStatus('Cursor test sent — watch the desktop center');
-      return;
-    }
-    setStatus('Testing cursor through HTTP fallback…');
-    try {
-      const response = await fetch('/input-test', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        credentials: 'same-origin',
-        body: '{}'
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok || !result.ok) {
-        setStatus('Cursor test failed: ' + (result.error || ('HTTP ' + response.status)));
-      } else {
-        setStatus('Cursor test passed via HTTP fallback — moved to ' + result.x + ', ' + result.y);
-      }
-    } catch (error) {
-      setStatus('Cursor test failed: ' + (error.message || 'network error'));
-    }
-  });
-
-  const typeText = document.getElementById('typeText');
-  document.getElementById('typeButton').addEventListener('click', () => {
-    typeText.classList.add('visible');
-    typeText.focus();
-  });
-  typeText.addEventListener('focus', () => typeText.classList.add('visible'));
-  typeText.addEventListener('input', () => {
-    const value = typeText.value;
-    if (value) send({type:'type_text', text:value.slice(0, 2000)});
-    typeText.value = '';
-  });
-  typeText.addEventListener('keydown', event => {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      send({type:'key_down', code:'Enter'});
-      send({type:'key_up', code:'Enter'});
-      typeText.blur();
-    }
-    if (event.key === 'Escape') {
-      typeText.blur();
-    }
-  });
-
-  function pointerPosition(event) {
-    const rect = video.getBoundingClientRect();
-    const vw = video.videoWidth || rect.width;
-    const vh = video.videoHeight || rect.height;
-    const scale = Math.min(rect.width / vw, rect.height / vh);
-    const shownW = vw * scale, shownH = vh * scale;
-    const left = rect.left + (rect.width - shownW) / 2;
-    const top = rect.top + (rect.height - shownH) / 2;
-    return {
-      x: Math.max(0, Math.min(1, (event.clientX - left) / shownW)),
-      y: Math.max(0, Math.min(1, (event.clientY - top) / shownH))
-    };
-  }
-
-  video.addEventListener('pointermove', event => {
-    const p = pointerPosition(event); send({type:'move', ...p});
-  });
-  video.addEventListener('pointerdown', event => {
-    event.preventDefault(); video.focus();
-    try { video.setPointerCapture(event.pointerId); } catch (_) {}
-    const p = pointerPosition(event); send({type:'move', ...p});
-    send({type:'mouse_down', button:({0:'left',1:'middle',2:'right'})[event.button] || 'left'});
-  });
-  video.addEventListener('pointerup', event => {
-    event.preventDefault();
-    send({type:'mouse_up', button:({0:'left',1:'middle',2:'right'})[event.button] || 'left'});
-  });
-  video.addEventListener('contextmenu', event => event.preventDefault());
-  video.addEventListener('wheel', event => {
-    event.preventDefault();
-    send({type:'scroll', delta: Math.max(-10, Math.min(10, -Math.sign(event.deltaY) * Math.max(1, Math.round(Math.abs(event.deltaY) / 100))))});
-  }, {passive:false});
-
-  const ignoredKeys = new Set(['F5', 'F11', 'F12']);
-  document.addEventListener('keydown', event => {
-    if (event.target.closest && event.target.closest('button,form,input')) return;
-    if (ignoredKeys.has(event.code)) return;
-    event.preventDefault();
-    send({type:'key_down', code:event.code});
-  });
-  document.addEventListener('keyup', event => {
-    if (event.target.closest && event.target.closest('button,form,input')) return;
-    if (ignoredKeys.has(event.code)) return;
-    event.preventDefault();
-    send({type:'key_up', code:event.code});
-  });
-
-  document.getElementById('fullscreen').addEventListener('click', async () => {
-    try {
-      if (!document.fullscreenElement) await document.documentElement.requestFullscreen();
-      else await document.exitFullscreen();
-    } catch (_) {}
-  });
-
-  window.addEventListener('beforeunload', () => {
-    if (ws) ws.close();
-    if (inputWs) inputWs.close();
-    if (peerConnection) peerConnection.close();
-    clearTimeout(webrtcTimer);
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-  });
-  startFrameMonitor();
-  setInterval(updateTelemetry, 250);
-  connectInput();
-  connectWebRtc();
+  video.addEventListener('pointermove',e=>{const p=videoPoint(e);if(p)send({type:'move',x:p.x,y:p.y})});
+  video.addEventListener('pointerdown',e=>{e.preventDefault();video.setPointerCapture?.(e.pointerId);const p=videoPoint(e);if(p)send({type:'move',x:p.x,y:p.y});send({type:'mouse_down',button:e.button===2?'right':e.button===1?'middle':'left'})});
+  video.addEventListener('pointerup',e=>{e.preventDefault();send({type:'mouse_up',button:e.button===2?'right':e.button===1?'middle':'left'})});
+  video.addEventListener('contextmenu',e=>e.preventDefault());
+  video.addEventListener('wheel',e=>{e.preventDefault();send({type:'scroll',delta:-Math.sign(e.deltaY)*Math.min(10,Math.max(1,Math.round(Math.abs(e.deltaY)/40)))})},{passive:false});
+  document.addEventListener('keydown',e=>{if(document.activeElement===typeText||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(e.key==='F11')return;e.preventDefault();send({type:'key_down',code:e.code})});
+  document.addEventListener('keyup',e=>{if(document.activeElement===typeText||['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;if(e.key==='F11')return;e.preventDefault();send({type:'key_up',code:e.code})});
+  document.getElementById('testInput').addEventListener('click',async()=>{if(httpTestInProgress)return;httpTestInProgress=true;setStatus('Testing Windows cursor…');try{const response=await fetch('/input-test',{method:'POST',credentials:'same-origin',cache:'no-store'}),result=await response.json().catch(()=>({}));if(!response.ok||!result.ok)throw new Error(result.error||('HTTP '+response.status));setStatus('Cursor test passed · moved to '+result.x+', '+result.y)}catch(error){setStatus('Cursor test failed: '+(error.message||'request failed'))}finally{httpTestInProgress=false;updateTelemetry()}});
+  document.getElementById('typeButton').addEventListener('click',()=>{typeText.classList.toggle('visible');if(typeText.classList.contains('visible')){typeText.value='';typeText.focus()}});
+  typeText.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();if(typeText.value)send({type:'type_text',text:typeText.value});typeText.value='';typeText.blur();typeText.classList.remove('visible')}else if(e.key==='Escape'){typeText.value='';typeText.blur();typeText.classList.remove('visible')}});
+  document.getElementById('fullscreen').addEventListener('click',()=>{if(document.fullscreenElement)document.exitFullscreen?.();else stage.requestFullscreen?.()});
+  stage.addEventListener('click',()=>stage.focus());
+  window.addEventListener('beforeunload',()=>{try{ws?.close()}catch(_){}});
+  startFrameMonitor();connect();updateTelemetry();
 })();
 </script>
 </body>
