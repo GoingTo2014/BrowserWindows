@@ -8,10 +8,10 @@
   <style>
     :root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#f4f4f5;background:#09090b}
     *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#09090b}
-    header{height:44px;display:flex;align-items:center;gap:12px;padding:0 12px;background:#18181b;border-bottom:1px solid #303038}
-    .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+    header{min-height:44px;display:flex;align-items:center;gap:10px;padding:6px 12px;background:#18181b;border-bottom:1px solid #303038;flex-wrap:wrap}
+    .brand{font-weight:650;white-space:nowrap}.status{font-size:12px;color:#a1a1aa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:100px}.telemetry{font-size:11px;color:#a1a1aa;white-space:nowrap;font-variant-numeric:tabular-nums}
     button{border:1px solid #454550;border-radius:8px;background:#27272a;color:#f4f4f5;padding:7px 10px;font:inherit;cursor:pointer}
-    #stage{height:calc(100dvh - 44px);width:100%;display:grid;place-items:center;position:relative;outline:none;min-width:0;min-height:0;overflow:hidden}
+    #stage{height:calc(100dvh - 56px);width:100%;display:grid;place-items:center;position:relative;outline:none;min-width:0;min-height:0;overflow:hidden}
     video{display:block;width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;outline:none;touch-action:none;user-select:none;-webkit-user-select:none}
     body{height:100dvh}
     button,video{-webkit-tap-highlight-color:transparent}
@@ -19,13 +19,15 @@
     #message.hidden{display:none}
     #typeText{position:absolute;z-index:3;left:10px;right:10px;bottom:10px;width:calc(100% - 20px);padding:12px;border:1px solid #52525b;border-radius:10px;background:#18181b;color:#fff;font:inherit;display:none}
     #typeText.visible{display:block}
-    @media(max-width:600px){header{gap:7px;padding:0 8px}.brand{font-size:14px}.status{font-size:11px}button{padding:6px 8px;font-size:12px}}
+    @media(max-width:600px){header{gap:6px;padding:5px 7px;min-height:56px}.brand{font-size:13px}.status{font-size:10px;min-width:70px}.telemetry{font-size:10px}button{padding:5px 7px;font-size:11px}}
   </style>
 </head>
 <body>
   <header>
     <div class="brand">BrowserWindows</div>
     <div class="status" id="status">Connecting…</div>
+    <div class="telemetry" id="telemetry">FPS: — · Frame: — · Input: connecting</div>
+    <button id="testInput" type="button">Test cursor</button>
     <button id="typeButton" type="button">Type</button>
     <button id="fullscreen" type="button">Fullscreen</button>
     <form method="post" action="/logout"><button type="submit">Disconnect</button></form>
@@ -40,6 +42,13 @@
   const video = document.getElementById('screen');
   const stage = document.getElementById('stage');
   const status = document.getElementById('status');
+  const telemetry = document.getElementById('telemetry');
+  let inputConnected = false;
+  let lastFrameAt = 0;
+  let frameCount = 0;
+  let fps = 0;
+  let frameMonitorStarted = false;
+  let lastFrameCounterAt = performance.now();
   const message = document.getElementById('message');
   let ws, inputWs, mediaSource, sourceBuffer, objectUrl, peerConnection;
   let fallbackStarted = false;
@@ -49,6 +58,40 @@
   let initQueued = false;
 
   function setStatus(text) { status.textContent = text; }
+  function updateTelemetry() {
+    const age = lastFrameAt ? (performance.now() - lastFrameAt) / 1000 : null;
+    const frameText = age === null ? 'no frames' : age > 3 ? 'FROZEN ' + age.toFixed(1) + 's' : age.toFixed(1) + 's ago';
+    telemetry.textContent = 'FPS: ' + (frameMonitorStarted ? fps : '—') + ' · Frame: ' + frameText + ' · Input: ' + (inputConnected ? 'connected' : 'disconnected');
+    if (lastFrameAt && age > 3) {
+      telemetry.style.color = '#f87171';
+      if (!message.classList.contains('hidden')) return;
+      showMessage('Stream frozen: no new video frames for ' + age.toFixed(1) + ' seconds.');
+    } else {
+      telemetry.style.color = inputConnected ? '#a1a1aa' : '#fbbf24';
+      if (lastFrameAt && age <= 3 && message.textContent.startsWith('Stream frozen:')) hideMessage();
+    }
+  }
+  function noteVideoFrame() { lastFrameAt = performance.now(); frameCount++; }
+  function startFrameMonitor() {
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      const watch = () => { noteVideoFrame(); video.requestVideoFrameCallback(watch); };
+      video.requestVideoFrameCallback(watch);
+    } else {
+      const watch = () => {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.paused) noteVideoFrame();
+        requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
+    }
+    setInterval(() => {
+      const now = performance.now();
+      fps = Math.round(frameCount * 1000 / Math.max(1, now - lastFrameCounterAt));
+      frameCount = 0;
+      lastFrameCounterAt = now;
+      frameMonitorStarted = true;
+      updateTelemetry();
+    }, 1000);
+  }
   function showMessage(text) { message.textContent = text; message.classList.remove('hidden'); }
   function hideMessage() { message.classList.add('hidden'); }
 
@@ -197,11 +240,18 @@
 
   function connectInput() {
     inputWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/input');
-    inputWs.onopen = () => setStatus('Connected · controls ready');
-    inputWs.onclose = () => {
-      if (!fallbackStarted && peerConnection) setStatus('Video connected · reconnect to restore controls');
+    inputWs.onopen = () => { inputConnected = true; setStatus('Input connected'); updateTelemetry(); };
+    inputWs.onmessage = event => {
+      if (typeof event.data !== 'string') return;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'input_test' && data.ok) {
+          setStatus('Cursor test acknowledged by Windows');
+        }
+      } catch (_) {}
     };
-    inputWs.onerror = () => setStatus('Control connection error');
+    inputWs.onclose = () => { inputConnected = false; setStatus('Input disconnected'); updateTelemetry(); };
+    inputWs.onerror = () => { inputConnected = false; setStatus('Input connection error'); updateTelemetry(); };
   }
 
   function send(data) {
@@ -211,6 +261,16 @@
       ws.send(JSON.stringify(data));
     }
   }
+
+  document.getElementById('testInput').addEventListener('click', () => {
+    if (!inputWs || inputWs.readyState !== WebSocket.OPEN) {
+      setStatus('Cursor test failed: input channel is not connected');
+      updateTelemetry();
+      return;
+    }
+    send({type:'test_cursor'});
+    setStatus('Cursor test sent — watch the desktop center');
+  });
 
   const typeText = document.getElementById('typeText');
   document.getElementById('typeButton').addEventListener('click', () => {
@@ -296,6 +356,8 @@
     clearTimeout(webrtcTimer);
     if (objectUrl) URL.revokeObjectURL(objectUrl);
   });
+  startFrameMonitor();
+  setInterval(updateTelemetry, 250);
   connectInput();
   connectWebRtc();
 })();
