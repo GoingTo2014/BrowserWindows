@@ -245,20 +245,81 @@
     }
   }
 
+  let inputReconnectTimer = null;
+  let httpMovePending = false;
+  let lastHttpMoveAt = 0;
+
   function connectInput() {
-    inputWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/input');
-    inputWs.onopen = () => { inputConnected = true; setStatus('Input connected'); updateTelemetry(); };
+    if (inputWs && (inputWs.readyState === WebSocket.CONNECTING || inputWs.readyState === WebSocket.OPEN)) return;
+    try {
+      inputWs = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/input');
+    } catch (error) {
+      inputConnected = false;
+      setStatus('Input WebSocket unavailable; using HTTP fallback');
+      updateTelemetry();
+      scheduleInputReconnect();
+      return;
+    }
+    inputWs.onopen = () => {
+      inputConnected = true;
+      setStatus('Input connected (WebSocket)');
+      updateTelemetry();
+    };
     inputWs.onmessage = event => {
       if (typeof event.data !== 'string') return;
       try {
         const data = JSON.parse(event.data);
-        if (data.type === 'input_test' && data.ok) {
-          setStatus('Cursor test acknowledged by Windows');
+        if (data.type === 'input_test') {
+          setStatus(data.ok ? 'Cursor test acknowledged by Windows' : 'Cursor test failed: Windows did not confirm cursor position');
         }
       } catch (_) {}
     };
-    inputWs.onclose = () => { inputConnected = false; setStatus('Input disconnected'); updateTelemetry(); };
-    inputWs.onerror = () => { inputConnected = false; setStatus('Input connection error'); updateTelemetry(); };
+    inputWs.onclose = event => {
+      inputConnected = false;
+      setStatus('Input WebSocket closed (' + event.code + (event.reason ? ': ' + event.reason : '') + '); HTTP fallback active');
+      updateTelemetry();
+      scheduleInputReconnect();
+    };
+    inputWs.onerror = () => {
+      inputConnected = false;
+      setStatus('Input WebSocket error; HTTP fallback active');
+      updateTelemetry();
+    };
+  }
+
+  function scheduleInputReconnect() {
+    if (inputReconnectTimer) clearTimeout(inputReconnectTimer);
+    inputReconnectTimer = setTimeout(() => {
+      inputReconnectTimer = null;
+      connectInput();
+    }, 2500);
+  }
+
+  async function sendHttpInput(data) {
+    if (data.type === 'move') {
+      const now = performance.now();
+      if (httpMovePending || now - lastHttpMoveAt < 40) return;
+      httpMovePending = true;
+      lastHttpMoveAt = now;
+    }
+    try {
+      const response = await fetch('/input-event', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify(data)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        setStatus('HTTP input failed: ' + (result.error || ('HTTP ' + response.status)));
+      } else if (!inputConnected) {
+        setStatus('Input working via HTTP fallback');
+      }
+    } catch (error) {
+      setStatus('Input failed: ' + (error.message || 'network error'));
+    } finally {
+      if (data.type === 'move') httpMovePending = false;
+    }
   }
 
   function send(data) {
@@ -266,17 +327,34 @@
       inputWs.send(JSON.stringify(data));
     } else if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(data));
+    } else {
+      sendHttpInput(data);
     }
   }
 
-  document.getElementById('testInput').addEventListener('click', () => {
-    if (!inputWs || inputWs.readyState !== WebSocket.OPEN) {
-      setStatus('Cursor test failed: input channel is not connected');
-      updateTelemetry();
+  document.getElementById('testInput').addEventListener('click', async () => {
+    if (inputWs && inputWs.readyState === WebSocket.OPEN) {
+      send({type:'test_cursor'});
+      setStatus('Cursor test sent — watch the desktop center');
       return;
     }
-    send({type:'test_cursor'});
-    setStatus('Cursor test sent — watch the desktop center');
+    setStatus('Testing cursor through HTTP fallback…');
+    try {
+      const response = await fetch('/input-test', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        credentials: 'same-origin',
+        body: '{}'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) {
+        setStatus('Cursor test failed: ' + (result.error || ('HTTP ' + response.status)));
+      } else {
+        setStatus('Cursor test passed via HTTP fallback — moved to ' + result.x + ', ' + result.y);
+      }
+    } catch (error) {
+      setStatus('Cursor test failed: ' + (error.message || 'network error'));
+    }
   });
 
   const typeText = document.getElementById('typeText');
