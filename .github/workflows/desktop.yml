@@ -2,9 +2,6 @@ name: Start BrowserWindows session
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "server.py"
 
 permissions:
   contents: read
