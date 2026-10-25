@@ -403,6 +403,36 @@ def handle_input(message: dict, mouse_ctl: mouse.Controller, key_ctl: keyboard.C
             (key_ctl.press if kind == "key_down" else key_ctl.release)(key)
 
 
+@sock.route("/input")
+def input_websocket(ws):
+    """Dedicated input channel so mouse/keyboard control works during WebRTC video."""
+    if not session.get("authenticated"):
+        ws.close(reason="Authentication required")
+        return
+    mouse_ctl = mouse.Controller()
+    key_ctl = keyboard.Controller()
+    import ctypes
+    user32 = ctypes.windll.user32
+    width = int(user32.GetSystemMetrics(0))
+    height = int(user32.GetSystemMetrics(1))
+    try:
+        while True:
+            try:
+                raw = ws.receive(timeout=1)
+            except TimeoutError:
+                continue
+            if raw is None:
+                break
+            try:
+                message = json.loads(raw) if isinstance(raw, str) else {}
+                if isinstance(message, dict):
+                    handle_input(message, mouse_ctl, key_ctl, width, height)
+            except (ValueError, TypeError, KeyError, OverflowError):
+                pass
+    except Exception:
+        pass
+
+
 @sock.route("/ws")
 def websocket(ws):
     if not session.get("authenticated"):
