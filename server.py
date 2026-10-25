@@ -40,7 +40,7 @@ login_lock = threading.Lock()
 
 @app.before_request
 def require_login():
-    if request.endpoint in {"login", "static"}:
+    if request.path == "/login" or request.endpoint == "static":
         return None
     if not session.get("authenticated"):
         if request.path == "/ws":
