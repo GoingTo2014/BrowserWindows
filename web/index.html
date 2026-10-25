@@ -46,6 +46,7 @@
   const telemetry = document.getElementById('telemetry');
   let inputConnected = false;
   let lastFrameAt = 0;
+  let streamExpectedAt = 0;
   let frameCount = 0;
   let fps = 0;
   let frameMonitorStarted = false;
@@ -60,13 +61,16 @@
 
   function setStatus(text) { status.textContent = text; }
   function updateTelemetry() {
-    const age = lastFrameAt ? (performance.now() - lastFrameAt) / 1000 : null;
-    const frameText = age === null ? 'no frames' : age > 3 ? 'FROZEN ' + age.toFixed(1) + 's' : age.toFixed(1) + 's ago';
+    const now = performance.now();
+    const age = lastFrameAt ? (now - lastFrameAt) / 1000 : null;
+    const waitingAge = streamExpectedAt ? (now - streamExpectedAt) / 1000 : null;
+    const frameText = age !== null ? (age > 3 ? 'FROZEN ' + age.toFixed(1) + 's' : age.toFixed(1) + 's ago') : waitingAge !== null ? 'no frames ' + waitingAge.toFixed(1) + 's' : '—';
     telemetry.textContent = 'FPS: ' + (frameMonitorStarted ? fps : '—') + ' · Frame: ' + frameText + ' · Input: ' + (inputConnected ? 'connected' : 'disconnected');
-    if (lastFrameAt && age > 3) {
+    if ((lastFrameAt && age > 3) || (!lastFrameAt && waitingAge !== null && waitingAge > 3)) {
       telemetry.style.color = '#f87171';
+      const detail = lastFrameAt ? 'no new video frames for ' + age.toFixed(1) + ' seconds.' : 'no video frames received after ' + waitingAge.toFixed(1) + ' seconds.';
       if (message.classList.contains('hidden') || !message.textContent.startsWith('Stream frozen:')) {
-        showMessage('Stream frozen: no new video frames for ' + age.toFixed(1) + ' seconds.');
+        showMessage('Stream frozen: ' + detail);
       }
     } else {
       telemetry.style.color = inputConnected ? '#a1a1aa' : '#fbbf24';
@@ -148,7 +152,7 @@
     showMessage('Connecting to the Windows desktop…');
     ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => setStatus('Connected · starting H.264 stream');
+    ws.onopen = () => { streamExpectedAt = performance.now(); setStatus('Connected · starting H.264 stream'); updateTelemetry(); };
     ws.onmessage = event => {
       if (typeof event.data === 'string') {
         try {
@@ -191,6 +195,7 @@
       peerConnection.addTransceiver('video', {direction: 'recvonly'});
       peerConnection.ontrack = event => {
         if (fallbackStarted) return;
+        streamExpectedAt = performance.now();
         video.srcObject = event.streams[0] || new MediaStream([event.track]);
         video.play().catch(() => {});
         event.track.onunmute = () => {
