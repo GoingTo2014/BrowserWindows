@@ -35,7 +35,9 @@
   const stage = document.getElementById('stage');
   const status = document.getElementById('status');
   const message = document.getElementById('message');
-  let ws, mediaSource, sourceBuffer, objectUrl;
+  let ws, mediaSource, sourceBuffer, objectUrl, peerConnection;
+  let fallbackStarted = false;
+  let webrtcTimer;
   const appendQueue = [];
   let initQueued = false;
 
@@ -84,8 +86,13 @@
     }, {once:true});
   }
 
-  function connect() {
-    setStatus('Connecting…');
+  function connectTcp() {
+    if (fallbackStarted) return;
+    fallbackStarted = true;
+    clearTimeout(webrtcTimer);
+    if (peerConnection) { peerConnection.close(); peerConnection = null; }
+    video.srcObject = null;
+    setStatus('Using TCP fallback…');
     showMessage('Connecting to the Windows desktop…');
     ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     ws.binaryType = 'arraybuffer';
@@ -120,6 +127,61 @@
       setStatus('Disconnected');
       showMessage('The desktop stream disconnected. Refresh this page after checking the GitHub Actions run.');
     };
+  }
+
+  async function connectWebRtc() {
+    setStatus('Trying WebRTC/UDP…');
+    showMessage('Trying low-latency WebRTC video. TCP fallback will start automatically if UDP is unavailable.');
+    try {
+      peerConnection = new RTCPeerConnection({
+        iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+      });
+      peerConnection.addTransceiver('video', {direction: 'recvonly'});
+      peerConnection.ontrack = event => {
+        if (fallbackStarted) return;
+        video.srcObject = event.streams[0] || new MediaStream([event.track]);
+        video.play().catch(() => {});
+        hideMessage();
+        setStatus('WebRTC video connected');
+      };
+      peerConnection.onconnectionstatechange = () => {
+        if (peerConnection && peerConnection.connectionState === 'connected') {
+          clearTimeout(webrtcTimer);
+          setStatus('WebRTC · UDP when available');
+        } else if (peerConnection && ['failed','closed'].includes(peerConnection.connectionState) && !fallbackStarted) {
+          connectTcp();
+        }
+      };
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      await Promise.race([
+        new Promise(resolve => {
+          if (peerConnection.iceGatheringState === 'complete') resolve();
+          else peerConnection.addEventListener('icegatheringstatechange', () => {
+            if (peerConnection.iceGatheringState === 'complete') resolve();
+          }, {once:false});
+        }),
+        new Promise(resolve => setTimeout(resolve, 5000))
+      ]);
+      const response = await fetch('/offer', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({type:peerConnection.localDescription.type, sdp:peerConnection.localDescription.sdp})
+      });
+      if (!response.ok) {
+        const details = await response.json().catch(() => ({}));
+        throw new Error(details.error || 'WebRTC negotiation failed');
+      }
+      const answer = await response.json();
+      await peerConnection.setRemoteDescription(answer);
+      webrtcTimer = setTimeout(() => {
+        if (!fallbackStarted && (!peerConnection || peerConnection.connectionState !== 'connected')) connectTcp();
+      }, 9000);
+    } catch (error) {
+      console.warn('WebRTC unavailable; switching to TCP:', error);
+      connectTcp();
+    }
   }
 
   function send(data) {
@@ -182,9 +244,11 @@
 
   window.addEventListener('beforeunload', () => {
     if (ws) ws.close();
+    if (peerConnection) peerConnection.close();
+    clearTimeout(webrtcTimer);
     if (objectUrl) URL.revokeObjectURL(objectUrl);
   });
-  connect();
+  connectWebRtc();
 })();
 </script>
 </body>
