@@ -54,9 +54,11 @@ jobs:
 
       - name: Install Python dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check -r requirements.txt
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements.txt
+          python -c "import aiortc, av, numpy, flask_sock; print('WebRTC dependencies OK; aiortc=' + aiortc.__version__ + ', PyAV=' + av.__version__)"
 
-      - name: Start protected desktop streamer and tunnel
+      - name: Start WebRTC-first desktop streamer with TCP fallback and tunnel
         shell: pwsh
         env:
           DESKTOP_PASSWORD: ${{ secrets.DESKTOP_PASSWORD }}
@@ -109,12 +111,14 @@ jobs:
           }
 
           $summary = @"
-          ## BrowserWindows session is starting
+          ## BrowserWindows WebRTC-first session is starting
 
           **Desktop URL:** $publicUrl
 
+          **Video:** WebRTC/H.264 is attempted first. If WebRTC negotiation or video connectivity fails, the browser switches to the existing H.264 WebSocket/TCP fallback.
+
           Sign in with the password stored in the repository secret `DESKTOP_PASSWORD`.
-          This is a temporary Windows Server 2022 runner, not Windows 10. The session ends when this workflow is cancelled or reaches its time limit.
+          This is a temporary Windows Server 2022 runner, not Windows 10. Direct UDP connectivity is not guaranteed on GitHub-hosted runners. The session ends when this workflow is cancelled or reaches its time limit.
           "@
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           Write-Host "BrowserWindows URL: $publicUrl"
